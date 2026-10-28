@@ -1,0 +1,19 @@
+# 依赖
+node_modules/
+pnpm-lock.yaml
+
+# 运行期产物 / 临时截图（插件默认写在 %TEMP%\dsh-mi-phone-use，这里再兜一层）
+*.log
+*.tmp
+menu.png
+paste-*.png
+menu-*.png
+last.png
+last.crop.png
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini

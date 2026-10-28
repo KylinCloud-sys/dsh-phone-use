@@ -1,0 +1,49 @@
+{
+  "name": "dsh-mi-phone-use",
+  "version": "0.3.0",
+  "private": true,
+  "description": "DeepSeek Harness 插件：小米互联（跨屏协作）手机全后台操控——百分比坐标点击、批量动作、变化裁图，省 token 优先。不依赖 adb。",
+  "type": "module",
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "scripts/",
+    "mcp/",
+    "skill-content.mjs",
+    "cli.mjs",
+    "README.md",
+    "config.json",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "win32"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "phone",
+    "xiaomi",
+    "computer-use",
+    "mirror"
+  ],
+  "peerDependencies": {
+    "@deepseek-ai/dsh-mcp-client": ">=0.1.0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-mcp-client": {
+      "optional": true
+    }
+  },
+  "license": "MIT"
+}
