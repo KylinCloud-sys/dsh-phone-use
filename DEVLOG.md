@@ -1,7 +1,11 @@
 ﻿# 开发日志 · dsh-phone-use
 
 > 这份文件只给维护者看。使用者请读 [README.md](README.md)。
-> **用法：先看第 1 层目录和长期规则，只有需要时再跳到第 2 层对应小节，不要整篇通读。**
+>
+> **用法（重要）：非必要不要读第 2 层。**
+> 日常改动只需看「第 1 层」的目录 + 长期规则，这两部分就够用了。
+> 只有当你要动某块具体逻辑、或排查某个具体故障时，才按目录里的编号跳到第 2 层对应小节读，
+> **不要整篇通读第 2 层**——那里是历史细节和踩坑记录，全文读会浪费大量上下文。
 
 ---
 
@@ -12,26 +16,36 @@
 | 编号 | 主题 | 一句话 |
 |---|---|---|
 | R1–R9 | 长期规则 | 改这个插件前必须先看的约束 |
+| **D0** | 唤起判定：纯色 → 动态 → OCR | 三判据轮询，删掉蓝色插图判据的经过 |
+| **D0b** | 启动顺序：先妙享桌面再跨屏协作 | 推翻「不能同时启动」的旧结论 |
+| **D0c** | `package.json` 的 BOM 事故 | JSON 带 BOM 会让插件静默消失 |
 | D1 | 架构与文件职责 | 哪段代码在干什么 |
 | D2 | 中文输入链路 | 剪贴板 → 长按 → 看菜单 → 点粘贴 → 校验 |
 | D3 | 长按为什么常失败 | 少了 MOVE 心跳就被当点击 |
 | D4 | 菜单定位算法 | 差分 → 最宽条带 → 留白裁剪 → 坐标换算 |
+| D4b | 剪贴板同步延迟 | 1.5 秒够不够的实测 |
 | D5 | 菜单形态实测记录 | 同一 App 不同页面菜单都不一样 |
 | D6 | 已排除的输入路径 | WM_CHAR / WM_IME_CHAR / SendInput / 逐个试点击 |
-| D7 | OCR 尝试结论 | WinRT 类型加载失败，投屏中文 OCR 历史上就是乱码 |
+| D7 | OCR 尝试结论 | 早期失败结论（已被 D13e 推翻） |
 | D8 | 坐标与验收 | 百分比换算、inserted 判据 |
 | D9 | 剪贴板备份与还原 | `@restore` 协议 |
 | D10 | 回归清单 | 改完必须跑什么 |
 | D11 | 待办与已知缺口 | 还没做完的事 |
 | D11b | 0.3.1 清理记录 | 删了什么、为什么删 |
-| D12 | 变更记录 | 按版本记 |
+| D12 | 变更记录 | 按版本记（在文件末尾） |
 | D13 | 唤起与解锁规范 | 先 wake，再主人手动指纹解锁 |
+| D13b | 0.3.2 唤醒缺陷与修正 | 窗口存在 ≠ 画面可用 |
+| D13c | 窗口形态与三页判据 | 妙享桌面 → 跨屏协作的演变 |
+| D13d | 全自动唤起的正确实现 | 管家派生 + WM_ACTIVATE |
+| D13e | OCR 判据 | 推翻 D7，三页都能读出来 |
 | D14 | 提交前敏感信息检查 | 清除个人路径和密钥等信息 |
 
 ## 1.2 长期规则（违反会直接踩回坑里）
 
 - **R1 只跳读。** 开发/排障时先看本目录，按需读对应小节；不要把整份日志读一遍。
 - **R2 `.ps1` 必须 UTF-8 带 BOM。** 编辑工具很容易把 BOM 去掉，之后 Windows PowerShell 按 ANSI 解析中文注释，直接语法崩溃（报 `Unexpected token`）。
+- **R2b `.json` 绝对不能有 BOM。** `JSON.parse` 遇 BOM 直接抛 `Unexpected token ''`，DSH 读 bundle 的 `package.json` 失败后**静默跳过整个插件**——工具全消失、MCP 进程不启动、重启 DSH 也无效，极难排查。
+  改文件按类型区分：`.ps1` 要 BOM（`UTF8Encoding($true)`）；`.json` / `.mjs` / `.js` **不要**（`UTF8Encoding($false)`）。
 - **R3 不许猜菜单项位置。** 每个 App、每个页面的粘贴菜单项数/顺序/宽度都不同，必须先长按、截图、看清「粘贴」在哪，再点。
 - **R4 不许逐项点击试探。** 点错会触发「AI写作」「常用语」「全选」这类功能，副作用不可控。
 - **R5 以画面为验收标准。** 返回 `ok:true` 不代表字进去了，必须看 `inserted` 或截图确认。
@@ -144,6 +158,62 @@ Get-Process -Name 'MiSmartShareHandoff','MiScreenShare' | Stop-Process -Force
 **把主人一直最小化在任务栏的妙享桌面一起杀了。** 它被 kill 后无法用 `Start-Process` 简单拉起（3 秒就自己退出），只能由主人手动恢复。
 
 **规则：清理只针对 `MiScreenShare`，绝不碰 `MiSmartShareHandoff`。** 它是常驻程序，不是一次性的启动器。
+## D0c `package.json` 的 BOM 导致整个插件静默消失（2026-10-29）
+
+### 现象
+
+工具全部消失（`mcp__phone__*` 报 unknown tool），技能目录里也没有 `phone`。排查过程极具误导性：
+
+| 检查项 | 结果 |
+|---|---|
+| `package.json` dependencies / bundles | ✓ 都有 `dsh-phone-use` |
+| `node_modules` 链接 | ✓ Junction 正常 |
+| 插件 `cordis.patch.yml` | ✓ 内容正确 |
+| `index.js` / `skill-content.mjs` 加载 | ✓ 正常 |
+| MCP server 手动握手 | ✓ 正常返回 `serverInfo` |
+| **重启 DSH** | ✗ **无效** |
+| **新建会话** | ✗ **无效** |
+
+所有配置和代码看起来都对，但工具就是不出来。
+
+### 根因
+
+插件的 `package.json` 开头有 UTF-8 BOM（字节 `239,187,191`）：
+
+```
+Unexpected token '', "{" is not valid JSON
+```
+
+DSH 用 `JSON.parse` 读 bundle 的 `package.json`，遇 BOM 直接抛异常，然后**静默跳过整个插件**——不报错、不提示、MCP 进程根本不启动。
+
+### 怎么引入的
+
+升版本号时用了：
+
+```powershell
+[IO.File]::WriteAllText($p, $new, (New-Object Text.UTF8Encoding($true)))
+```
+
+`$true` = **写入 BOM**。这套写法对 `.ps1` 是必需的（否则中文按 ANSI 解析崩溃），但**对 JSON 是致命的**。
+
+### 修复
+
+```powershell
+# .ps1 → 要 BOM
+[IO.File]::WriteAllText($p, $t, (New-Object Text.UTF8Encoding($true)))
+# .json / .mjs / .js → 不要 BOM
+[IO.File]::WriteAllText($p, $t, (New-Object Text.UTF8Encoding($false)))
+```
+
+验证方法：
+
+```powershell
+node -e "JSON.parse(require('fs').readFileSync('<path>','utf8'))"
+```
+
+### 排查经验
+
+当"配置全对但工具就是不出来"时，**优先验证 JSON 能否被 `JSON.parse` 解析**，而不是去翻进程、翻配置、翻日志。DSH 对 bundle 加载失败是静默的，没有任何错误输出。
 ## D1 架构与文件职责
 
 - `scripts/phone.ps1` — 唯一真正干活的地方：唤起/恢复 XiaomiPcManager，定位「跨屏协作」窗口 → 找画面子窗口 `kMiChildSharedWindow` → 截图 / 点击 / 滑动 / 长按 / 键盘 / 剪贴板。所有参数走 JSON 请求文件，结果写 JSON 结果文件（避免中文控制台编码问题）。
