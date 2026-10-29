@@ -211,6 +211,29 @@
 3. 蓝色包围盒在 `Get-SurfaceStats` 里只累加计数、从不更新坐标，导致 `blueWide` 恒为 0。
 4. 用正则批量删调试代码时误删了 switch 的六个分支，只能从 git 恢复后精确重贴。
 
+## D13d 全自动唤起的正确实现（0.3.5，主人实测）
+
+**正确的启动流程**（主人人眼观察）：
+
+```
+点任务栏「妙享桌面-<设备名>」
+  → 弹出妙享桌面窗口（自绘、常为最小化/屏幕外、内容可能全白）
+  → 点一下这个窗口
+  → 妙享桌面自己拉起「跨屏协作」(MiScreenShare)
+  → 妙享桌面自行关闭，最终只剩「跨屏协作」
+  → 加载页（成功时很短）→ 解锁页
+```
+
+**三个关键发现**：
+
+1. **必须由管家派生 Handoff**。用 PowerShell 直接 `Start-Process` 启动的 Handoff 是孤儿进程（ppid=shell），窗口能弹出来但内容渲染不出来、点也没反应。要用 `PROC_THREAD_ATTRIBUTE_PARENT_PROCESS` 以管家为父进程启动。
+2. **点击前必须先 `WM_ACTIVATE`**。这个自绘窗口只收 `WM_LBUTTONDOWN/UP` 完全没反应（实测 PostMessage 和 SendMessage 都试过）；补一条 `WM_ACTIVATE(WA_ACTIVE)` 后再点就能拉起跨屏协作。`WM_ACTIVATE` 只是投递窗口消息，不会把窗口提到前台、不动鼠标。
+3. **不能同时启动 MiScreenShare.exe**。那样会多弹一个独立窗口、破坏握手，表现为加载页长时间不结束、最后报「无法连接」。
+
+**占位页判据补一条**：窗口刚创建未渲染时是黑屏（实测 dominant=0.74、74% 为黑），既不是纯白占位页也不是真实画面，此前会被误判成 `ready`。现在「整屏过暗」也计入占位页。
+
+**验证**：连续两次全自动唤醒都返回 `awaiting-unlock`，`MiScreenShare` 的 ppid 均为管家；主人指纹解锁后返回 `unlockState:"unlocked"`、`surface:"ready"`（dominant=0.824、colors=211）。
+
 ## D14 提交前敏感信息检查
 
 - 不把用户名、绝对工作区路径、外部项目路径、令牌、密码、手机号、聊天内容写入插件源文件或文档。

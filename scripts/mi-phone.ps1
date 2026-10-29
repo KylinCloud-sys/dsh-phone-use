@@ -535,7 +535,10 @@ function Invoke-Capture($target, [string]$out, [string]$prev, $region, [int]$max
       $result.colors = $colors.Count
       $result.dominant = [math]::Round($dominant, 3)
       $result.stdev = [math]::Round($sd, 2)
-      $result.blank = ($dominant -ge 0.94)
+      # 占位页判定：单一主色占满（加载/失败/解锁页几乎全白），
+      # 或整屏过暗（窗口刚创建、内容未渲染的黑屏，实测 dominant=0.74 且 74% 是黑）。
+      $darkRatio = $darkCount / [double]$n
+      $result.blank = (($dominant -ge 0.94) -or ($darkRatio -ge 0.60))
       $result.dark = [math]::Round($darkCount / [double]$n, 4)
       $result.blue = [math]::Round($blueCount / [double]$n, 4)
       # 蓝色元素包围盒占比：解锁提示页有一整幅蓝色手绘插图（占宽 54%、占高 31%），
@@ -963,18 +966,20 @@ function Find-WindowByClassInProcess([int]$procId, [string]$className) {
 }
 
 # 找 MiScreenShare.exe 的位置（它才是真正建「跨屏协作」窗口的进程）。
-function Resolve-ScreenShareExecutable {
-  $proc = Get-Process -Name 'MiScreenShare' -ErrorAction SilentlyContinue | Where-Object { $_.Path } | Select-Object -First 1
+function Resolve-ScreenShareExecutable([string]$exeName = 'MiSmartShareHandoff.exe') {
+  if (-not $exeName) { $exeName = 'MiSmartShareHandoff.exe' }
+  $baseName = [IO.Path]::GetFileNameWithoutExtension($exeName)
+  $proc = Get-Process -Name $baseName -ErrorAction SilentlyContinue | Where-Object { $_.Path } | Select-Object -First 1
   if ($proc) { return $proc.Path }
   $manager = Get-Process -Name 'XiaomiPcManager' -ErrorAction SilentlyContinue | Where-Object { $_.Path } | Select-Object -First 1
   if ($manager) {
-    $cand = Join-Path (Split-Path -Parent $manager.Path) 'MiScreenShare.exe'
+    $cand = Join-Path (Split-Path -Parent $manager.Path) $exeName
     if (Test-Path -LiteralPath $cand -PathType Leaf) { return $cand }
   }
   $patterns = @(
-    (Join-Path ${env:ProgramFiles} 'MI\XiaomiPCManager\*\MiScreenShare.exe'),
-    (Join-Path ${env:ProgramFiles(x86)} 'MI\XiaomiPCManager\*\MiScreenShare.exe'),
-    (Join-Path $env:LOCALAPPDATA 'MI\XiaomiPCManager\*\MiScreenShare.exe')
+    (Join-Path ${env:ProgramFiles} ("MI\XiaomiPCManager\*\" + $exeName)),
+    (Join-Path ${env:ProgramFiles(x86)} ("MI\XiaomiPCManager\*\" + $exeName)),
+    (Join-Path $env:LOCALAPPDATA ("MI\XiaomiPCManager\*\" + $exeName))
   )
   foreach ($p in $patterns) {
     if (-not $p) { continue }
@@ -1031,7 +1036,7 @@ function Get-SurfaceStats($target) {
         mean     = [math]::Round($mean, 1)
         stdev    = [math]::Round($sd, 2)
         dominant = [math]::Round($dominant, 3)
-        blank    = ($dominant -ge 0.94)
+        blank    = (($dominant -ge 0.94) -or (($darkCount / [double]$n) -ge 0.60))
         hash     = [MiPhone.Img]::Hash($bmp)
         # 失败页特征（主人实测）：黑字标题 + 蓝色链接同时存在。
         # 连接页是彩色圆点，黑字极少，可据此区分。
@@ -1072,6 +1077,95 @@ function Test-SurfaceAnimating($target, [int]$samples = 3, [int]$gapMs = 900) {
     animating = ($distinct -gt 1)
   }
 }
+# 以指定进程为父进程启动子进程。
+# 关键：管家派生 MiSmartShareHandoff 时，子进程能继承管家的管道/句柄，投屏握手才成立；
+# 由 PowerShell 直接启动会变成孤儿进程（ppid=shell），表现为加载页长时间不结束。
+function Start-ProcessWithParent([int]$parentPid, [string]$exePath, [string]$cmdLine) {
+  if (-not ([System.Management.Automation.PSTypeName]'MiPhone.Spawner').Type) {
+    Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+namespace MiPhone {
+  public class Spawner {
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct STARTUPINFO {
+      public int cb; public string lpReserved; public string lpDesktop; public string lpTitle;
+      public int dwX, dwY, dwXSize, dwYSize, dwXCountChars, dwYCountChars, dwFillAttribute, dwFlags;
+      public short wShowWindow, cbReserved2; public IntPtr lpReserved2, hStdInput, hStdOutput, hStdError;
+    }
+    [StructLayout(LayoutKind.Sequential)] public struct STARTUPINFOEX { public STARTUPINFO si; public IntPtr lpAttributeList; }
+    [StructLayout(LayoutKind.Sequential)] public struct PROCESS_INFORMATION { public IntPtr hProcess, hThread; public int dwProcessId, dwThreadId; }
+
+    [DllImport("kernel32.dll", SetLastError=true)] static extern bool InitializeProcThreadAttributeList(IntPtr l, int c, int f, ref IntPtr s);
+    [DllImport("kernel32.dll", SetLastError=true)] static extern bool UpdateProcThreadAttribute(IntPtr l, uint f, IntPtr a, IntPtr v, IntPtr cb, IntPtr p, IntPtr r);
+    [DllImport("kernel32.dll", SetLastError=true)] static extern bool DeleteProcThreadAttributeList(IntPtr l);
+    [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
+    static extern bool CreateProcess(string app, string cmd, IntPtr pa, IntPtr ta, bool inh, uint flags, IntPtr env, string dir, ref STARTUPINFOEX si, out PROCESS_INFORMATION pi);
+    [DllImport("kernel32.dll", SetLastError=true)] static extern IntPtr OpenProcess(uint a, bool i, int pid);
+    [DllImport("kernel32.dll", SetLastError=true)] static extern bool CloseHandle(IntPtr h);
+
+    public static string Spawn(int parentPid, string exe, string cmd) {
+      IntPtr hp = OpenProcess(0x0080, false, parentPid);
+      if (hp == IntPtr.Zero) return "ERR|OpenProcess " + Marshal.GetLastWin32Error();
+      IntPtr al = IntPtr.Zero;
+      try {
+        IntPtr sz = IntPtr.Zero;
+        InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref sz);
+        al = Marshal.AllocHGlobal(sz);
+        if (!InitializeProcThreadAttributeList(al, 1, 0, ref sz)) return "ERR|Init " + Marshal.GetLastWin32Error();
+        IntPtr v = Marshal.AllocHGlobal(IntPtr.Size);
+        Marshal.WriteIntPtr(v, hp);
+        bool ok = UpdateProcThreadAttribute(al, 0, (IntPtr)0x00020000, v, (IntPtr)IntPtr.Size, IntPtr.Zero, IntPtr.Zero);
+        Marshal.FreeHGlobal(v);
+        if (!ok) return "ERR|Attr " + Marshal.GetLastWin32Error();
+        var si = new STARTUPINFOEX();
+        si.si.cb = Marshal.SizeOf(typeof(STARTUPINFOEX));
+        si.lpAttributeList = al;
+        PROCESS_INFORMATION pi;
+        if (!CreateProcess(exe, cmd, IntPtr.Zero, IntPtr.Zero, false, 0x08080000, IntPtr.Zero, null, ref si, out pi))
+          return "ERR|Create " + Marshal.GetLastWin32Error();
+        CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+        return "OK|" + pi.dwProcessId;
+      } finally {
+        if (al != IntPtr.Zero) { DeleteProcThreadAttributeList(al); Marshal.FreeHGlobal(al); }
+        CloseHandle(hp);
+      }
+    }
+  }
+}
+"@ -ErrorAction Stop
+  }
+  return [MiPhone.Spawner]::Spawn($parentPid, $exePath, $cmdLine)
+}
+# 后台点击窗口客户区某点（PostMessage，不移动鼠标、不抢焦点）。
+function Invoke-BackgroundClick([IntPtr]$hwnd, [int]$x, [int]$y) {
+  $lp = [IntPtr](($y -shl 16) -bor ($x -band 0xFFFF))
+  [void][MiPhone.Native]::PostMessage($hwnd, 0x0201, [IntPtr]1, $lp)   # WM_LBUTTONDOWN
+  Start-Sleep -Milliseconds 80
+  [void][MiPhone.Native]::PostMessage($hwnd, 0x0202, [IntPtr]0, $lp)   # WM_LBUTTONUP
+}
+
+# 「妙享桌面」是启动器：窗口出现后需要点一下才会拉起「跨屏协作」。
+# 若窗口内容是纯色（还没渲染出按钮），点了也没用，先等它渲染。
+function Invoke-LauncherClick([IntPtr]$hwnd) {
+  # 启动器窗口常是自绘 + 最小化/屏幕外，先纯后台恢复出有效客户区，否则点是空坐标。
+  if ([MiPhone.Native]::IsIconic($hwnd) -or -not [MiPhone.Native]::IsWindowVisible($hwnd)) {
+    [void][MiPhone.Native]::RestoreNoActivate($hwnd)
+    Start-Sleep -Milliseconds 400
+  }
+  $client = Get-ClientInfo $hwnd
+  if ($client.W -lt 100 -or $client.H -lt 100) { return $false }
+
+  # 关键：这个自绘窗口必须先收到 WM_ACTIVATE，随后的鼠标消息才会被处理。
+  # 实测只发 WM_LBUTTONDOWN/UP 完全无效；补一条 WM_ACTIVATE 就能拉起「跨屏协作」。
+  # 注意 WM_ACTIVATE 只是投递窗口消息，不会把窗口提到前台、不动鼠标。
+  [void][MiPhone.Native]::PostMessage($hwnd, 0x0006, [IntPtr]1, [IntPtr]0)   # WM_ACTIVATE(WA_ACTIVE)
+  Start-Sleep -Milliseconds 200
+
+  # 窗口内容全白也照样有效——主人实测点哪里都能拉起，所以不做内容判断。
+  Invoke-BackgroundClick $hwnd ([int]($client.W / 2)) ([int]($client.H / 2))
+  return $true
+}
 function Invoke-Wake($spec, $req) {
   $timeoutMs = 15000
   if ($null -ne $req.timeoutMs) { $timeoutMs = [int]$req.timeoutMs }
@@ -1103,16 +1197,54 @@ function Invoke-Wake($spec, $req) {
     } catch { $launchError = $_.Exception.Message }
   }
 
-  # 2) 真正建「跨屏协作」窗口的是 MiScreenShare.exe。没有它就由插件自己拉起来。
-  $screenShareRunning = $null -ne (Get-Process -Name 'MiScreenShare' -ErrorAction SilentlyContinue | Select-Object -First 1)
-  if (-not $screenShareRunning) {
-    $ssExe = Resolve-ScreenShareExecutable
-    if ($ssExe) {
-      try {
-        # 最小化启动：进程自己建隐藏的 kMiScreenShareMainWindow，不抢前台
-        Start-Process -FilePath $ssExe -WindowStyle Minimized | Out-Null
-        $started = $true
-      } catch { $launchError = $_.Exception.Message }
+  # 2) 正确唤起方式（主人实测）：只启动「妙享桌面」(MiSmartShareHandoff)，
+  #    它会自己拉起「跨屏协作」(MiScreenShare)，随后妙享桌面自行关闭，最终只剩一个窗口。
+  #    ⚠ 绝不能同时启动 MiScreenShare.exe：那样会多弹一个独立窗口，破坏握手，
+  #    表现为加载页长时间不结束、最后报「无法连接」。
+  $castRunning = $null -ne (Get-Process -Name 'MiSmartShareHandoff' -ErrorAction SilentlyContinue | Select-Object -First 1)
+  if (-not $castRunning) {
+    $hoExe = Resolve-ScreenShareExecutable 'MiSmartShareHandoff.exe'
+    if ($hoExe) {
+      $devName = [string]$req.deviceName
+      $devId = [string]$req.deviceId
+      # 没显式传就回退到 config.json 的 cast.deviceName / cast.deviceId（本机私有，不入库）
+      if (-not $devId -or -not $devName) {
+        try {
+          $cfgPath = Join-Path $PSScriptRoot '..\config.local.json'
+          if (Test-Path -LiteralPath $cfgPath) {
+            $cfg = [IO.File]::ReadAllText($cfgPath) | ConvertFrom-Json
+            if (-not $devId -and $cfg.cast -and $cfg.cast.deviceId) { $devId = [string]$cfg.cast.deviceId }
+            if (-not $devName -and $cfg.cast -and $cfg.cast.deviceName) { $devName = [string]$cfg.cast.deviceName }
+          }
+        } catch { }
+      }
+      if ($devId) {
+        $hoArgs = @("--CastBusinessType=`"1`"")
+        if ($devName) { $hoArgs += "--DeviceName=`"$devName`"" }
+        $hoArgs += "--DeviceID=`"$devId`""
+        try {
+          $mgrPid = 0
+          try {
+            $m = Get-Process -Name 'XiaomiPcManager' -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($m) { $mgrPid = [int]$m.Id }
+          } catch { }
+          $cmdLine = '"' + $hoExe + '" ' + ($hoArgs -join ' ')
+          $spawnResult = $null
+          if ($mgrPid -gt 0) {
+            # 以管家为父进程启动：子进程能继承管家的管道/句柄，投屏握手才成立。
+            # 直接由 PowerShell 启动会变成孤儿进程，窗口虽在但内容渲染不出来、点也没反应。
+            try { $spawnResult = Start-ProcessWithParent $mgrPid $hoExe $cmdLine } catch { $spawnResult = $null }
+          }
+          if (-not ($spawnResult -like 'OK|*')) {
+            # 回退：普通启动（可能不完整，但至少给主人一个窗口去点）
+            Start-Process -FilePath $hoExe -ArgumentList $hoArgs -WindowStyle Minimized | Out-Null
+          }
+          $started = $true
+        } catch { $launchError = $_.Exception.Message }
+      } else {
+        # 没有设备信息就交给管家 UI，不盲启动
+        $launchError = '缺少 deviceId，无法后台发起投屏；请主人点一次任务栏「妙享桌面」图标。'
+      }
     }
   }
 
@@ -1121,6 +1253,7 @@ function Invoke-Wake($spec, $req) {
   $aspectReject = $false
   $lastTarget = $null
   $lastStats = $null
+  $launcherClicked = $false
   while ((Get-Date) -lt $deadline) {
     $parent = [MiPhone.Native]::FindParent($spec.Titles, $spec.ParentClass, $true)
     if ($parent -eq [IntPtr]::Zero) {
@@ -1134,6 +1267,11 @@ function Invoke-Wake($spec, $req) {
     if ($parent -ne [IntPtr]::Zero) {
       # 隐藏窗口要显示出来才能截图；SW_SHOWNOACTIVATE 不激活、不抢焦点
       if ([MiPhone.Native]::RestoreNoActivate($parent)) { $restored = $true; Start-Sleep -Milliseconds 250 }
+
+      # 「妙享桌面」是启动器：必须点一下才会拉起「跨屏协作」。每轮最多点一次，避免刷点击。
+      if (-not $launcherClicked -and [MiPhone.Native]::TitleOf($parent) -like '妙享桌面*') {
+        $launcherClicked = Invoke-LauncherClick $parent
+      }
       $child = [MiPhone.Native]::FindChild($parent, $spec.ChildClass)
       if ($child -eq [IntPtr]::Zero) { $child = [MiPhone.Native]::FindChild($parent, '') }
       if ($child -eq [IntPtr]::Zero) { $child = $parent }
@@ -1141,7 +1279,23 @@ function Invoke-Wake($spec, $req) {
         $client = Get-ClientInfo $child
         if (Test-PhoneAspect $client.W $client.H) {
           $target = @{ Parent = $parent; Child = $child }
-          $stats = Get-SurfaceStats $target
+          # 画面会经历 黑屏 → 加载页 → 解锁页/失败页 的快速过渡，单次采样容易误判。
+          # 连续采样到状态稳定（连续 2 次判定一致）或超时，再下结论。
+          $stats = $null
+          $prevKey = $null
+          $stableCount = 0
+          for ($probe = 0; $probe -lt 8; $probe++) {
+            $s = Get-SurfaceStats $target
+            if ($null -ne $s) {
+              $key = if ($s.unlockPage) { 'unlock' } elseif ($s.blank) { 'placeholder' } else { 'content' }
+              if ($key -eq $prevKey) { $stableCount++ } else { $stableCount = 0 }
+              $prevKey = $key
+              $stats = $s
+              # 连续两次一致即认为稳定；真实内容也要求稳定，避免把过渡帧当成 ready
+              if ($stableCount -ge 1) { break }
+            }
+            Start-Sleep -Milliseconds 500
+          }
           # 「手机解锁」提示页 = 投屏已连上、只差主人解锁，属于成功唤起。
           $isUnlockPage = ($null -ne $stats -and $stats.unlockPage -eq $true)
           if ($isUnlockPage) {

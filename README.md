@@ -26,7 +26,7 @@ DeepSeek Harness 插件：在**后台**操控小米手机——截图、点击�
 
 ## 安装
 
-前提：Windows 10/11、DSH 已启动过，并已完成小米互联与手机的配对/授权。插件可尝试启动 XiaomiPcManager、把被收起或推到屏幕外的「妙享桌面」窗口**纯后台**恢复出来（`SW_SHOWNOACTIVATE` + `SetWindowPos(SWP_NOACTIVATE)`，不抢焦点、不动鼠标）并等待画面；它不能替手机完成配对、授权或建立首次连接。唤起成功后，必须由主人在手机上手动指纹解锁。
+前提：Windows 10/11、DSH 已启动过，并已完成小米互联与手机的配对/授权，且 `config.local.json` 里填好 `cast.deviceId` / `cast.deviceName`（该文件已 gitignore）。插件会自动完成：以管家为父进程启动「妙享桌面」→ 纯后台恢复窗口 → 投递 `WM_ACTIVATE` 后点击启动器 → 由妙享桌面自己拉起「跨屏协作」→ 识别解锁页。全程不移动鼠标、不抢前台、不点锁屏/授权/配对按钮。它不能替手机完成配对、授权或建立首次连接。唤起成功后，必须由主人在手机上手动指纹解锁。
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File install.ps1

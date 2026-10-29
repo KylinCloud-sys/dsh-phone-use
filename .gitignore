@@ -11,6 +11,8 @@ menu-*.png
 last.png
 last.crop.png
 
+config.local.json
+
 # 编辑器 / 系统
 .vscode/
 .idea/
