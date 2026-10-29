@@ -858,6 +858,7 @@ function Invoke-OpenMenu($target, [string]$at, [int]$holdMs, [string]$text) {
     Start-Sleep -Milliseconds 1500
   }
 
+
   $preShot = Join-Path $shotDir 'menu-pre.png'
   $postShot = Join-Path $shotDir 'menu-post.png'
   try { Invoke-Capture $target $preShot $null $null 0 | Out-Null } catch { }
