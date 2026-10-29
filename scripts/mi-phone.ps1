@@ -53,6 +53,7 @@ namespace MiPhone
         [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
 
         [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr l);
+        [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
         [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr h, EnumProc cb, IntPtr l);
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr h, StringBuilder sb, int max);
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder sb, int max);
@@ -111,6 +112,8 @@ namespace MiPhone
         {
             bool acted = false;
             if (IsIconic(h)) { ShowWindow(h, 4); acted = true; }   // SW_SHOWNOACTIVATE
+            // 纯隐藏（非最小化、坐标正常但不可见）也必须显示出来，否则 PrintWindow 拿不到画面
+            if (!IsWindowVisible(h)) { ShowWindow(h, 4); acted = true; }
             RECT r;
             GetWindowRect(h, out r);
             int sw = GetSystemMetrics(0), sh = GetSystemMetrics(1);
@@ -332,8 +335,11 @@ try {
 [void][MiPhone.Native]::SetProcessDPIAware()
 
 $VT = @{
+  # 主人点任务栏「妙享桌面-<设备名>」图标后，窗口会先以一个自绘窗口类出现（过渡态、无子窗口），
+  # 随后演变成「跨屏协作」kMiScreenShareMainWindow（正式投屏窗口，带 kMiChildSharedWindow 子窗口）。
+  # 因此两个标题都要认，按实际形态择优选：有子窗口的优先，其次是当前可见且有内容的。
   WindowTitles = @('跨屏协作', '妙享桌面')
-  ParentClass  = 'kMiScreenShareMainWindow'
+  ParentClass  = ''
   ChildClass   = 'kMiChildSharedWindow'
 }
 
@@ -492,25 +498,59 @@ function Invoke-Capture($target, [string]$out, [string]$prev, $region, [int]$max
 
   $result = @{ w = $crop.Width; h = $crop.Height; hash = $hash; changed = $true; box = $null }
 
-  # 空白检测：采样色数与亮度标准差都很低 → 投屏没真正建立（省下无用的白图）
+  # 空白检测：主色占比过高 → 投屏没真正建立（实测加载态 97% 纯白，颜色数 32 却仍是空的）
   try {
-    $stepX = [math]::Max(1, [int]($crop.Width / 48))
-    $stepY = [math]::Max(1, [int]($crop.Height / 48))
+    $stepX = [math]::Max(1, [int]($crop.Width / 96))
+    $stepY = [math]::Max(1, [int]($crop.Height / 96))
     $colors = New-Object 'System.Collections.Generic.HashSet[string]'
-    $sum = 0.0; $sum2 = 0.0; $n = 0
+    $colorCount = New-Object 'System.Collections.Generic.Dictionary[string,int]'
+    $sum = 0.0; $sum2 = 0.0; $n = 0; $darkCount = 0; $blueCount = 0
+    $blueMinX = [int]::MaxValue; $blueMinY = [int]::MaxValue; $blueMaxX = -1; $blueMaxY = -1
     for ($sy = 0; $sy -lt $crop.Height; $sy += $stepY) {
       for ($sx = 0; $sx -lt $crop.Width; $sx += $stepX) {
         $c = $crop.GetPixel($sx, $sy)
         $v = ($c.R + $c.G + $c.B) / 3.0
         $sum += $v; $sum2 += $v * $v; $n++
-        [void]$colors.Add("$([int]($c.R / 16)):$([int]($c.G / 16)):$([int]($c.B / 16))")
+        $key = "$([int]($c.R / 16)):$([int]($c.G / 16)):$([int]($c.B / 16))"
+        [void]$colors.Add($key)
+        if ($colorCount.ContainsKey($key)) { $colorCount[$key]++ } else { $colorCount[$key] = 1 }
+        if ($c.R -lt 60 -and $c.G -lt 60 -and $c.B -lt 60) { $darkCount++ }
+        if ($c.B -gt 150 -and ($c.B - $c.R) -gt 80) {
+          $blueCount++
+          if ($sx -lt $blueMinX) { $blueMinX = $sx }
+          if ($sx -gt $blueMaxX) { $blueMaxX = $sx }
+          if ($sy -lt $blueMinY) { $blueMinY = $sy }
+          if ($sy -gt $blueMaxY) { $blueMaxY = $sy }
+        }
       }
     }
     if ($n -gt 0) {
       $mean = $sum / $n
       $sd = [math]::Sqrt([math]::Max(0.0, ($sum2 / $n) - ($mean * $mean)))
+      # 主色占比：投屏未建立时画面几乎被单一底色占满（实测加载态 97% 纯白）。
+      # 真实手机画面即使背景素，也总有文字/图标把主色压到 90% 以下。
+      $top = 0
+      foreach ($kv in $colorCount.GetEnumerator()) { if ($kv.Value -gt $top) { $top = $kv.Value } }
+      $dominant = [double]$top / [double]$n
       $result.colors = $colors.Count
-      $result.blank = (($colors.Count -le 3) -and ($sd -lt 6.0))
+      $result.dominant = [math]::Round($dominant, 3)
+      $result.stdev = [math]::Round($sd, 2)
+      $result.blank = ($dominant -ge 0.94)
+      $result.dark = [math]::Round($darkCount / [double]$n, 4)
+      $result.blue = [math]::Round($blueCount / [double]$n, 4)
+      # 蓝色元素包围盒占比：解锁提示页有一整幅蓝色手绘插图（占宽 54%、占高 31%），
+      # 加载失败页只有一行蓝色小字（包围盒极小）。用这个区分"已连上待解锁"和"连不上"。
+      $blueWide = 0.0; $blueTall = 0.0
+      if ($blueCount -gt 0 -and $blueMaxX -ge $blueMinX -and $blueMaxY -ge $blueMinY) {
+        $blueWide = ($blueMaxX - $blueMinX + 1) / [double]$crop.Width
+        $blueTall = ($blueMaxY - $blueMinY + 1) / [double]$crop.Height
+      }
+      $result.blueWide = [math]::Round($blueWide, 3)
+      $result.blueTall = [math]::Round($blueTall, 3)
+      # 解锁提示页：蓝色插图够大 + 有黑色标题字
+      $result.unlockPage = ($result.blank -and $blueWide -ge 0.30 -and $blueTall -ge 0.15 -and ($darkCount / [double]$n) -gt 0.001)
+      # 加载失败页：有蓝字但没有大插图
+      $result.errorPage = $result.blank -and (-not $result.unlockPage) -and (($darkCount / [double]$n) -gt 0.001) -and (($blueCount / [double]$n) -gt 0.0002)
     }
   } catch { }
 
@@ -896,7 +936,56 @@ function Resolve-XiaomiExecutable([string]$launchPath) {
   return $null
 }
 
-# 画面是不是"空壳"：纯色/近纯色说明投屏还没真正开始，不能当成可用画面报成功。
+# 判定"这是不是真实手机画面"：不看尺寸（横竖屏会互换、缩放会改分辨率），
+# 只看宽高比是否像一块手机屏，以及画面是否有内容。
+function Test-PhoneAspect([int]$w, [int]$h) {
+  if ($w -le 0 -or $h -le 0) { return $false }
+  $ratio = [double]$w / [double]$h
+  if ($ratio -lt 1.0) { $ratio = 1.0 / $ratio }   # 横屏时取倒数，两种朝向都接受
+  # 常见手机屏 16:9(1.78) ~ 21:9(2.33)，留点余量
+  return ($ratio -ge 1.55 -and $ratio -le 2.45)
+}
+
+# 在进程里按类名找窗口（含隐藏），用于找 MiScreenShare 自己建的投屏窗口。
+function Find-WindowByClassInProcess([int]$procId, [string]$className) {
+  $found = [IntPtr]::Zero
+  $cb = [MiPhone.Native+EnumProc]{
+    param($h, $l)
+    $owner = 0
+    [void][MiPhone.Native]::GetWindowThreadProcessId($h, [ref]$owner)
+    if ($owner -eq $procId -and [MiPhone.Native]::ClassOf($h) -eq $className) {
+      $script:wakeFound = $h
+    }
+    return $true
+  }
+  [void][MiPhone.Native]::EnumWindows($cb, [IntPtr]::Zero)
+  return $script:wakeFound
+}
+
+# 找 MiScreenShare.exe 的位置（它才是真正建「跨屏协作」窗口的进程）。
+function Resolve-ScreenShareExecutable {
+  $proc = Get-Process -Name 'MiScreenShare' -ErrorAction SilentlyContinue | Where-Object { $_.Path } | Select-Object -First 1
+  if ($proc) { return $proc.Path }
+  $manager = Get-Process -Name 'XiaomiPcManager' -ErrorAction SilentlyContinue | Where-Object { $_.Path } | Select-Object -First 1
+  if ($manager) {
+    $cand = Join-Path (Split-Path -Parent $manager.Path) 'MiScreenShare.exe'
+    if (Test-Path -LiteralPath $cand -PathType Leaf) { return $cand }
+  }
+  $patterns = @(
+    (Join-Path ${env:ProgramFiles} 'MI\XiaomiPCManager\*\MiScreenShare.exe'),
+    (Join-Path ${env:ProgramFiles(x86)} 'MI\XiaomiPCManager\*\MiScreenShare.exe'),
+    (Join-Path $env:LOCALAPPDATA 'MI\XiaomiPCManager\*\MiScreenShare.exe')
+  )
+  foreach ($p in $patterns) {
+    if (-not $p) { continue }
+    $hit = Get-ChildItem -Path $p -File -ErrorAction SilentlyContinue |
+      Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($hit) { return $hit.FullName }
+  }
+  return $null
+}
+
+# 画面是不是"空壳"：纯色/近纯色说明投屏还没真正开始。
 function Get-SurfaceStats($target) {
   $tmp = Join-Path ([IO.Path]::GetTempPath()) ('mi-surface-' + [guid]::NewGuid().ToString('N') + '.png')
   try {
@@ -904,26 +993,54 @@ function Get-SurfaceStats($target) {
     if (-not (Test-Path -LiteralPath $tmp)) { return $null }
     $bmp = [System.Drawing.Bitmap]::FromFile($tmp)
     try {
-      $stepX = [math]::Max(1, [int]($bmp.Width / 48))
-      $stepY = [math]::Max(1, [int]($bmp.Height / 48))
-      $colors = New-Object 'System.Collections.Generic.HashSet[string]'
-      $sum = 0.0; $sum2 = 0.0; $n = 0
+      $stepX = [math]::Max(1, [int]($bmp.Width / 96))
+      $stepY = [math]::Max(1, [int]($bmp.Height / 96))
+      $colorCount = New-Object 'System.Collections.Generic.Dictionary[string,int]'
+      $sum = 0.0; $sum2 = 0.0; $n = 0; $darkCount = 0; $blueCount = 0
+    $blueMinX = [int]::MaxValue; $blueMinY = [int]::MaxValue; $blueMaxX = -1; $blueMaxY = -1
       for ($y = 0; $y -lt $bmp.Height; $y += $stepY) {
         for ($x = 0; $x -lt $bmp.Width; $x += $stepX) {
           $c = $bmp.GetPixel($x, $y)
           $v = ($c.R + $c.G + $c.B) / 3.0
           $sum += $v; $sum2 += $v * $v; $n++
-          [void]$colors.Add("$([int]($c.R / 16)):$([int]($c.G / 16)):$([int]($c.B / 16))")
+          $key = "$([int]($c.R / 16)):$([int]($c.G / 16)):$([int]($c.B / 16))"
+          if ($colorCount.ContainsKey($key)) { $colorCount[$key]++ } else { $colorCount[$key] = 1 }
+          if ($c.R -lt 60 -and $c.G -lt 60 -and $c.B -lt 60) { $darkCount++ }
+          if ($c.B -gt 150 -and ($c.B - $c.R) -gt 80) {
+            $blueCount++
+            if ($x -lt $blueMinX) { $blueMinX = $x }
+            if ($x -gt $blueMaxX) { $blueMaxX = $x }
+            if ($y -lt $blueMinY) { $blueMinY = $y }
+            if ($y -gt $blueMaxY) { $blueMaxY = $y }
+          }
         }
       }
       if ($n -eq 0) { return $null }
       $mean = $sum / $n
       $sd = [math]::Sqrt([math]::Max(0.0, ($sum2 / $n) - ($mean * $mean)))
+      $top = 0
+      foreach ($kv in $colorCount.GetEnumerator()) { if ($kv.Value -gt $top) { $top = $kv.Value } }
+      $dominant = [double]$top / [double]$n
+      $bw2 = 0.0; $bt2 = 0.0
+      if ($blueCount -gt 0 -and $blueMaxX -ge $blueMinX -and $blueMaxY -ge $blueMinY) {
+        $bw2 = ($blueMaxX - $blueMinX + 1) / [double]$bmp.Width
+        $bt2 = ($blueMaxY - $blueMinY + 1) / [double]$bmp.Height
+      }
       return @{
-        colors  = $colors.Count
-        mean    = [math]::Round($mean, 1)
-        stdev   = [math]::Round($sd, 2)
-        blank   = (($colors.Count -le 3) -and ($sd -lt 6.0))
+        colors   = $colorCount.Count
+        mean     = [math]::Round($mean, 1)
+        stdev    = [math]::Round($sd, 2)
+        dominant = [math]::Round($dominant, 3)
+        blank    = ($dominant -ge 0.94)
+        hash     = [MiPhone.Img]::Hash($bmp)
+        # 失败页特征（主人实测）：黑字标题 + 蓝色链接同时存在。
+        # 连接页是彩色圆点，黑字极少，可据此区分。
+        dark  = [math]::Round($darkCount / [double]$n, 4)
+        blue  = [math]::Round($blueCount / [double]$n, 4)
+        blueWide = [math]::Round($bw2, 3)
+        blueTall = [math]::Round($bt2, 3)
+        unlockPage = (($dominant -ge 0.94) -and $bw2 -ge 0.30 -and $bt2 -ge 0.15 -and ($darkCount / [double]$n) -gt 0.001)
+        errorPage = (($dominant -ge 0.94) -and -not ($bw2 -ge 0.30 -and $bt2 -ge 0.15)) -and (($darkCount / [double]$n) -gt 0.001) -and (($blueCount / [double]$n) -gt 0.0002)
       }
     } finally { $bmp.Dispose() }
   } catch {
@@ -933,7 +1050,28 @@ function Get-SurfaceStats($target) {
   }
 }
 
-# 全后台唤醒：只用窗口 API（不点任务栏/托盘、不 SendInput、不动鼠标、不激活窗口）。
+# 全后台唤醒：只用窗口 API 与进程启动，不点任务栏/托盘、不 SendInput、不动鼠标、不激活窗口。
+# 区分"正在连接"和"加载失败"：不靠 OCR，靠画面有没有在动。
+# 主人实测：连接中有三个跳动的彩色圆点（画面持续变化）；加载失败是静态错误页（画面完全不动）。
+#
+# 重要边界：本函数只在「主色占比 >= 0.94（blank）」的前提下才有判别意义。
+# 手机桌面静止时画面也不动，但桌面不可能 94% 以上是同一主色，所以不会走到这里；
+# 绝不可把「静止」单独当作失败判据。
+function Test-SurfaceAnimating($target, [int]$samples = 3, [int]$gapMs = 900) {
+  $hashes = New-Object System.Collections.Generic.List[string]
+  for ($i = 0; $i -lt $samples; $i++) {
+    $st = Get-SurfaceStats $target
+    if ($null -ne $st -and $st.hash) { $hashes.Add([string]$st.hash) }
+    if ($i -lt $samples - 1) { Start-Sleep -Milliseconds $gapMs }
+  }
+  if ($hashes.Count -lt 2) { return $null }
+  $distinct = ($hashes | Select-Object -Unique).Count
+  return @{
+    samples  = $hashes.Count
+    distinct = $distinct
+    animating = ($distinct -gt 1)
+  }
+}
 function Invoke-Wake($spec, $req) {
   $timeoutMs = 15000
   if ($null -ne $req.timeoutMs) { $timeoutMs = [int]$req.timeoutMs }
@@ -943,11 +1081,10 @@ function Invoke-Wake($spec, $req) {
   $restored = $false
   $launchError = $null
 
-  # 客户端进程在不在，和手机画面有没有投出来是两件事：先确保客户端在跑（最小化启动，不抢前台）。
+  # 1) 管家客户端要在跑，否则投屏无从谈起。
   $clientRunning = $false
   try {
-    $existing = Get-Process -Name 'XiaomiPcManager' -ErrorAction SilentlyContinue | Select-Object -First 1
-    $clientRunning = $null -ne $existing
+    $clientRunning = $null -ne (Get-Process -Name 'XiaomiPcManager' -ErrorAction SilentlyContinue | Select-Object -First 1)
   } catch { $clientRunning = $false }
   if (-not $clientRunning) {
     $exe = Resolve-XiaomiExecutable $launchPath
@@ -955,49 +1092,93 @@ function Invoke-Wake($spec, $req) {
       return @{
         ok = $false; action = 'wake'; state = 'client-not-found'; deviceState = 'unknown'
         unlockRequired = $false
-        userActionRequired = '电脑上没找到小米互联客户端。请安装并登录小米电脑管家，或手动打开一次「跨屏协作」。'
+        userActionRequired = '电脑上没找到小米互联客户端。请安装并登录小米电脑管家。'
         error = '找不到小米互联客户端。'
       }
     }
     try {
       Start-Process -FilePath $exe -WindowStyle Minimized | Out-Null
       $started = $true
+      Start-Sleep -Milliseconds 1200
     } catch { $launchError = $_.Exception.Message }
   }
 
-  # 关键：投屏窗口可能被藏到屏幕外(-21333,-21333)或处于最小化，必须连隐藏窗口一起找。
-  $parent = [IntPtr]::Zero
+  # 2) 真正建「跨屏协作」窗口的是 MiScreenShare.exe。没有它就由插件自己拉起来。
+  $screenShareRunning = $null -ne (Get-Process -Name 'MiScreenShare' -ErrorAction SilentlyContinue | Select-Object -First 1)
+  if (-not $screenShareRunning) {
+    $ssExe = Resolve-ScreenShareExecutable
+    if ($ssExe) {
+      try {
+        # 最小化启动：进程自己建隐藏的 kMiScreenShareMainWindow，不抢前台
+        Start-Process -FilePath $ssExe -WindowStyle Minimized | Out-Null
+        $started = $true
+      } catch { $launchError = $_.Exception.Message }
+    }
+  }
+
   $deadline = (Get-Date).AddMilliseconds($timeoutMs)
   $blankOnce = $false
+  $aspectReject = $false
+  $lastTarget = $null
+  $lastStats = $null
   while ((Get-Date) -lt $deadline) {
-    if ($parent -eq [IntPtr]::Zero -or -not [MiPhone.Native]::IsWindow($parent)) {
-      $parent = [MiPhone.Native]::FindParent($spec.Titles, $spec.ParentClass, $true)
+    $parent = [MiPhone.Native]::FindParent($spec.Titles, $spec.ParentClass, $true)
+    if ($parent -eq [IntPtr]::Zero) {
+      # 退回按类名在本进程内找（MiScreenShare 自建的窗口可能还没标题）
+      $ssProc = Get-Process -Name 'MiScreenShare' -ErrorAction SilentlyContinue | Select-Object -First 1
+      if ($ssProc) {
+        $script:wakeFound = [IntPtr]::Zero
+        $parent = Find-WindowByClassInProcess $ssProc.Id $spec.ParentClass
+      }
     }
     if ($parent -ne [IntPtr]::Zero) {
+      # 隐藏窗口要显示出来才能截图；SW_SHOWNOACTIVATE 不激活、不抢焦点
       if ([MiPhone.Native]::RestoreNoActivate($parent)) { $restored = $true; Start-Sleep -Milliseconds 250 }
       $child = [MiPhone.Native]::FindChild($parent, $spec.ChildClass)
       if ($child -eq [IntPtr]::Zero) { $child = [MiPhone.Native]::FindChild($parent, '') }
-      if ($child -eq [IntPtr]::Zero) {
-        $self = Get-ClientInfo $parent
-        if ($self.W -ge 100 -and $self.H -ge 100) { $child = $parent }
-      }
+      if ($child -eq [IntPtr]::Zero) { $child = $parent }
       if ($child -ne [IntPtr]::Zero) {
-        $target = @{ Parent = $parent; Child = $child }
-        $stats = Get-SurfaceStats $target
-        if ($null -ne $stats -and -not $stats.blank) {
-          $info = Get-WindowInfo $target
-          $info.action = 'wake'
-          $info.state = if ($started) { 'started' } elseif ($restored) { 'restored' } else { 'ready' }
-          $info.surface = 'ready'
-          $info.started = $started
-          $info.restored = $restored
-          # 画面有内容只说明投屏在传，不能从窗口推断手机已解锁。
-          $info.unlockRequired = $true
-          $info.unlockState = 'unknown'
-          $info.userPrompt = '小米互联画面已就绪。请主人在手机上手动完成指纹解锁；解锁完成前不要继续操作。插件不会代为解锁。'
-          return $info
+        $client = Get-ClientInfo $child
+        if (Test-PhoneAspect $client.W $client.H) {
+          $target = @{ Parent = $parent; Child = $child }
+          $stats = Get-SurfaceStats $target
+          # 「手机解锁」提示页 = 投屏已连上、只差主人解锁，属于成功唤起。
+          $isUnlockPage = ($null -ne $stats -and $stats.unlockPage -eq $true)
+          if ($isUnlockPage) {
+            $info = Get-WindowInfo $target
+            $info.action = 'wake'
+            $info.state = 'awaiting-unlock'
+            $info.surface = 'unlock-prompt'
+            $info.started = $started
+            $info.restored = $restored
+            $info.aspect = [math]::Round([double]$client.W / [double]$client.H, 3)
+            $info.unlockRequired = $true
+            $info.unlockState = 'locked'
+            $info.ok = $true
+            $info.userPrompt = '小米互联已连上，手机处于锁屏状态。请主人在手机上手动完成指纹解锁；解锁完成并确认后再继续操作。插件不会代为解锁。'
+            return $info
+          }
+          if ($null -ne $stats -and -not $stats.blank) {
+            $info = Get-WindowInfo $target
+            $info.action = 'wake'
+            $info.state = if ($started) { 'started' } elseif ($restored) { 'restored' } else { 'ready' }
+            $info.surface = 'ready'
+            $info.started = $started
+            $info.restored = $restored
+            $info.aspect = [math]::Round([double]$client.W / [double]$client.H, 3)
+            # 画面已有真实内容（不是解锁提示页）说明手机已解锁可直接操作；
+            # 但仍无法 100% 排除锁屏壁纸等情形，故标记 unknown 并在需要时提示。
+            $info.unlockRequired = $false
+            $info.unlockState = 'unlocked'
+            $info.userPrompt = '小米互联画面已就绪，手机看起来已解锁，可以继续操作。若发现画面仍是锁屏，请主人手动指纹解锁。插件不会代为解锁。'
+            return $info
+          }
+          $blankOnce = $true
+          $lastTarget = $target
+          $lastStats = $stats
+        } elseif ($client.W -gt 0 -and $client.H -gt 0) {
+          $aspectReject = $true
         }
-        $blankOnce = $true
       }
     }
     Start-Sleep -Milliseconds 500
@@ -1005,29 +1186,53 @@ function Invoke-Wake($spec, $req) {
 
   if ($launchError) {
     return @{
-      ok = $false; action = 'wake'; state = 'launch-failed'; started = $false
+      ok = $false; action = 'wake'; state = 'launch-failed'; started = $started
       unlockRequired = $false; error = "启动小米互联失败：$launchError"
     }
   }
   if ($blankOnce) {
-    # 窗口在，但画面是空的：投屏通道没起来，通常是手机没在同一局域网/没连上。
+    # 判"连接中"还是"已失败"，按可靠性排序：
+    # 1) 失败页颜色特征（黑字标题 + 蓝链接，主人实测）—— 最可靠
+    # 2) 画面是否在动 —— 连接中有跳动圆点；注意桌面静止时也不动，故只作兜底
+    $motion = $null
+    if ($lastTarget) { $motion = Test-SurfaceAnimating $lastTarget 3 900 }
+    $isErrorPage = ($null -ne $lastStats -and $lastStats.errorPage -eq $true)
+    $connecting = (-not $isErrorPage) -and ($null -ne $motion -and $motion.animating)
     return @{
-      ok = $false; action = 'wake'; state = 'screen-not-projected'; deviceState = 'not-connected'
+      ok = $false; action = 'wake'
+      state = if ($connecting) { 'connecting' } else { 'connect-failed' }
+      deviceState = 'not-connected'
+      started = $started; restored = $restored
+      animating = if ($null -ne $motion) { $motion.animating } else { $null }
+      unlockRequired = $false
+      userActionRequired = if ($connecting) {
+        '投屏正在连接中，请稍等片刻再让我唤醒一次。此时不需要指纹解锁。'
+      } elseif ($isErrorPage) {
+        '投屏没连上，画面停在「加载失败」页。请确认手机和电脑在同一局域网、手机端小米互联已开启，然后重新发起投屏。此时不需要指纹解锁。'
+      } else {
+        '投屏没连上，画面停在加载页且没有任何变化。请确认手机和电脑在同一局域网、手机端小米互联已开启，然后重新发起投屏。此时不需要指纹解锁。'
+      }
+      error = if ($connecting) { '投屏仍在连接中。' } elseif ($isErrorPage) { '投屏连接失败（加载失败页）。' } else { '投屏连接失败（画面无变化）。' }
+      errorPage = $isErrorPage
+    }
+  }
+  if ($aspectReject) {
+    return @{
+      ok = $false; action = 'wake'; state = 'surface-not-phone'; deviceState = 'not-connected'
       started = $started; restored = $restored
       unlockRequired = $false
-      userActionRequired = '找到了小米互联窗口但没有真实的手机画面（空白）。请确认手机和电脑连同一个局域网、手机端小米互联已开启并允许投屏；连上后再让我唤醒。此时还不需要指纹解锁。'
-      error = '小米互联窗口存在，但画面为空，投屏尚未建立。'
+      userActionRequired = '找到了窗口，但画面宽高比不像手机屏（可能是空壳或缩放中的过渡态）。请确认手机端已投屏。'
+      error = '窗口宽高比不像手机画面。'
     }
   }
   return @{
     ok = $false; action = 'wake'; state = 'phone-not-found'; deviceState = 'not-connected'
     started = $started; restored = $restored
     unlockRequired = $false
-    userActionRequired = '没发现手机画面窗口，通常表示手机不在身边或不在同一局域网。请让手机和电脑连同一局域网、开启小米互联后重试。'
-    error = '没有找到手机画面窗口（设备可能不在附近或不在同一局域网）。'
+    userActionRequired = '没找到跨屏协作窗口，通常表示手机不在身边或不在同一局域网。'
+    error = '没有找到手机画面窗口。'
   }
 }
-
 # ---------------------------------------------------------------------------
 # 主流程
 # ---------------------------------------------------------------------------
@@ -1101,18 +1306,8 @@ try {
       $result.did = @{ action = 'longpress'; px = $px; py = $py; ms = $ms }
     }
     'clip' {
-      # 只操作本机剪贴板（互联会同步到手机），不触发任何手机动作
-      $bak = Join-Path (Join-Path $env:TEMP 'dsh-mi-phone-use') 'clip-backup.txt'
-      if ($null -ne $req.value -and ([string]$req.value) -eq '@restore') {
-        if (Test-Path $bak) {
-          $prev = [IO.File]::ReadAllText($bak, [System.Text.UTF8Encoding]::new($false))
-          Set-Clipboard -Value $prev -ErrorAction Stop
-          Remove-Item $bak -Force -ErrorAction SilentlyContinue
-          $result = @{ ok = $true; clip = 'restored'; n = $prev.Length }
-        } else {
-          $result = @{ ok = $true; clip = 'nothing-to-restore' }
-        }
-      } elseif ($null -ne $req.value) {
+      $bak = Join-Path $env:TEMP 'dsh-mi-phone-use\clip-backup.txt'
+      if ($null -ne $req.value) {
         if (-not (Test-Path $bak)) {
           try {
             $prev = Get-Clipboard -Raw -ErrorAction Stop
