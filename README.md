@@ -45,6 +45,14 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 自检：
 
 ```powershell
+node scripts/selfcheck.mjs        # 环境自检（会真的后台点一下屏幕中心）
+powershell -File scripts/parse-check.ps1 scripts/mi-phone.ps1   # 只查 PowerShell 语法
+node scripts/mcp-test.mjs         # 只测 MCP 握手与工具清单
+```
+
+（后两个是开发用工具，不跑也不影响使用。）
+
+```powershell
 node scripts/selfcheck.mjs
 ```
 

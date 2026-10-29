@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## 0.3.10 — 2026-10-29
+
+- 清理死代码：删除 `keybd_event`（全局键盘注入 API，0.3.1 后已无调用）与 `IsZoomed`（从未使用）两个 P/Invoke 声明。
+- README 补充开发工具用法：`scripts/parse-check.ps1`（只查 PowerShell 语法）、`scripts/mcp-test.mjs`（测 MCP 握手与工具清单）。
+- 全量验证通过：全自动唤醒 `state:restored`（`MiScreenShare` 由管家派生）、OCR 判据三页回归全部正确、真实画面不被误判、MCP 四工具握手正常。
+
 ## 0.3.9 — 2026-10-29
 
 - **移除动画判据**：连接页/失败页的区分不再依赖「画面是否在动」，全部改由 OCR 文字判定。相关代码（`Test-SurfaceAnimating`、文字包围盒几何判据）已彻底删除。

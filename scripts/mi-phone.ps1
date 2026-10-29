@@ -50,7 +50,6 @@ namespace MiPhone
     {
         public delegate bool EnumProc(IntPtr hWnd, IntPtr lParam);
 
-        [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
 
         [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr l);
         [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
@@ -66,7 +65,6 @@ namespace MiPhone
         [DllImport("user32.dll")] public static extern IntPtr GetParent(IntPtr h);
         [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
         [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
-        [DllImport("user32.dll")] public static extern bool IsZoomed(IntPtr h);
         [DllImport("user32.dll")] public static extern int GetSystemMetrics(int index);
         [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr hdc, uint flags);
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr SendMessage(IntPtr h, uint msg, IntPtr w, IntPtr l);
