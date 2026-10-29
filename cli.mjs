@@ -2,6 +2,7 @@
 // 会话无关的 CLI：技能加载后即可用，不依赖 phone_* 工具是否被投影进当前会话。
 //
 // 用法：
+//   node cli.mjs wake
 //   node cli.mjs info
 //   node cli.mjs see [--full] [--region 0,60,100,40]
 //   node cli.mjs do '{"steps":[{"tap":"50,88"},{"wait":500}]}'
@@ -134,7 +135,12 @@ function flagValue(name) {
   return i >= 0 ? rest[i + 1] : undefined
 }
 
-if (cmd === 'info') {
+if (cmd === 'wake') {
+  const rawTimeout = Number(flagValue('--timeout') || 15000)
+  const timeoutMs = Math.max(3000, Math.min(60000, Number.isFinite(rawTimeout) ? Math.trunc(rawTimeout) : 15000))
+  const r = await run({ action: 'wake', timeoutMs }, timeoutMs + 15000)
+  emit(r)
+} else if (cmd === 'info') {
   const r = await run({ action: 'info' }, 20000)
   emit(r.ok === false ? { ok: false, error: r.error } : {
     ok: true,

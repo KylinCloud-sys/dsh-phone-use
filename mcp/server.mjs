@@ -16,7 +16,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PKG_DIR = path.resolve(__dirname, '..')
 const SCRIPT = path.join(PKG_DIR, 'scripts', 'mi-phone.ps1')
 const CONFIG_FILE = path.join(PKG_DIR, 'config.json')
-const BASE = path.join(os.tmpdir(), 'dsh-mi-phone-use')
+const BASE = process.env.MI_PHONE_TMP || path.join(os.tmpdir(), 'dsh-mi-phone-use')
 const MCP_PROTOCOL_VERSION = '2024-11-05'
 const SERVER_NAME = 'miphone'
 
@@ -147,6 +147,34 @@ function normalizeSteps(steps) {
 // 工具定义
 // ---------------------------------------------------------------------------
 const TOOLS = [
+  {
+    name: 'phone_wake',
+    description: '后台唤起/恢复小米互联并等待手机画面子窗口。成功后一定返回 unlockRequired=true：必须让主人在手机上手动指纹解锁，得到明确确认前不要继续操控；插件不点击锁屏、授权或配对按钮。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        timeoutMs: { type: 'integer', minimum: 3000, maximum: 60000, description: '等待小米互联/手机画面出现的最长时间，默认 15000ms' },
+      },
+      additionalProperties: false,
+    },
+    async handler(args = {}) {
+      const timeoutMs = Number.isFinite(Number(args.timeoutMs)) ? Number(args.timeoutMs) : 15000
+      const bounded = Math.max(3000, Math.min(60000, Math.trunc(timeoutMs)))
+      const r = await run({ action: 'wake', timeoutMs: bounded }, bounded + 15000)
+      if (r.ok === false) return { text: { ok: false, ...r } }
+      return {
+        text: {
+          ok: true,
+          action: 'wake',
+          s: [r.screen.w, r.screen.h],
+          started: !!r.started,
+          restored: !!r.restored,
+          unlockRequired: true,
+          userPrompt: r.userPrompt,
+        },
+      }
+    },
+  },
   {
     name: 'phone_info',
     description: '体检小米互联手机窗口：窗口是否存在、画面区像素尺寸、是否最小化。约 60 tokens，仅开头或怀疑异常时调用。',

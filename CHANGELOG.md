@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## 0.3.2 — 2026-10-29
+
+- 新增 `phone_wake`：后台尝试启动 XiaomiPcManager、恢复最小化窗口，并等待手机画面子窗口。
+- `phone_wake` 成功后固定返回 `unlockRequired:true`，明确要求主人手动完成手机指纹解锁；插件不点击锁屏、授权或配对按钮。
+- CLI 新增 `node cli.mjs wake`；同步修正顶层 `clip:"@restore"` 的实际实现，使其与 batch 行为一致。
+- 清理即将提交内容中的本机路径和个人环境信息；不推送远程仓库。
+
 ## 0.3.1 — 2026-10-29
 
 - 清理死代码：删除从未被调用的 `Send-UnicodeInput`（含 C# `SendInput`/`INPUT` 声明）、`Invoke-Paste`/`Send-Combo`（含全局 Ctrl 注入）、`Get-BitmapStream`、`restoreclip` 动作，以及 `Invoke-PasteAt` 里已被否掉的“逐个试点击菜单项”逻辑。

@@ -9,6 +9,7 @@ DeepSeek Harness 插件：在**后台**操控小米手机——截图、点击�
 - **看**：截手机画面，画面没变化时自动不返回图片
 - **点**：按百分比坐标点击、长按、滑动
 - **写**：英文数字直接逐键输入，中文走剪贴板 + 长按粘贴
+- **唤起**：`phone_wake` 后台启动/恢复小米互联并等待手机画面
 - **批量**：一次调用串多步动作，执行完只回变化区域
 
 ## 为什么用它
@@ -25,7 +26,7 @@ DeepSeek Harness 插件：在**后台**操控小米手机——截图、点击�
 
 ## 安装
 
-前提：Windows 10/11、DSH 已启动过、小米互联已投出手机画面。
+前提：Windows 10/11、DSH 已启动过，并已完成小米互联与手机的配对/授权。插件可尝试启动 XiaomiPcManager、恢复最小化窗口并等待画面；它不能替手机完成配对、授权或建立首次连接。唤起成功后，必须由主人在手机上手动指纹解锁。
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File install.ps1
@@ -33,7 +34,7 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 
 然后**重启 DSH 并新建一个会话**（已存在的会话不会刷新工具清单）。
 
-装好应看到三个工具 `mcp__miphone__phone_info` / `phone_see` / `phone_do` 和技能 `mi-phone`。
+装好应看到四个工具 `mcp__miphone__phone_wake` / `phone_info` / `phone_see` / `phone_do` 和技能 `mi-phone`。
 
 自检：
 
@@ -48,6 +49,12 @@ powershell -ExecutionPolicy Bypass -File install.ps1 -Uninstall
 ```
 
 ## 怎么用
+
+### 每次操作先唤起并解锁
+
+AI 应先调用 `phone_wake`。成功返回 `unlockRequired:true` 并给出 `userPrompt`，这只表示 Windows 端画面已找到，不表示手机已解锁。AI 必须提醒主人：**请在手机上手动完成指纹解锁**，等待主人明确回复“已解锁”后，才调用 `phone_see` 或 `phone_do`。插件不会点击锁屏、授权、配对或确认按钮。
+
+如果 `phone_wake` 返回 `awaiting-phone-screen`，说明客户端可能已启动但还没有手机画面子窗口；应让主人检查小米互联投屏/连接，不要盲目点击。
 
 ### 中文输入是怎么实现的
 
@@ -68,6 +75,10 @@ powershell -ExecutionPolicy Bypass -File install.ps1 -Uninstall
 - 全局 Ctrl 注入：会和你的物理键盘抢状态，默认禁用。
 
 你那套「实体键盘敲拼音 → 电脑输入法选字 → 汉字进手机」走的是互联自己的键盘转发链路，不是窗口消息，插件没法在纯后台复现。维护者的完整踩坑记录见 [DEVLOG.md](DEVLOG.md)。
+
+### 窗口恢复和剪贴板恢复不是一回事
+
+`phone_wake` / PowerShell 的 `restore` 是恢复已经存在但最小化的小米互联窗口；`clip:"@restore"` 只恢复剪贴板内容。二者不要混淆。
 
 ```json
 // 看画面

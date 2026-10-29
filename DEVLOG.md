@@ -25,6 +25,8 @@
 | D11 | 待办与已知缺口 | 还没做完的事 |
 | D11b | 0.3.1 清理记录 | 删了什么、为什么删 |
 | D12 | 变更记录 | 按版本记 |
+| D13 | 唤起与解锁规范 | 先 wake，再主人手动指纹解锁 |
+| D14 | 提交前敏感信息检查 | 清除个人路径和密钥等信息 |
 
 ## 1.2 长期规则（违反会直接踩回坑里）
 
@@ -44,8 +46,8 @@
 
 ## D1 架构与文件职责
 
-- `scripts/mi-phone.ps1` — 唯一真正干活的地方：定位「跨屏协作」窗口 → 找画面子窗口 `kMiChildSharedWindow` → 截图 / 点击 / 滑动 / 长按 / 键盘 / 剪贴板。所有参数走 JSON 请求文件，结果写 JSON 结果文件（避免中文控制台编码问题）。
-- `mcp/server.mjs` — MCP stdio 服务，把 `phone_info / phone_see / phone_do` 三个工具暴露给 DSH，负责参数校验、三档权限闸门、帧文件复用。
+- `scripts/mi-phone.ps1` — 唯一真正干活的地方：唤起/恢复 XiaomiPcManager，定位「跨屏协作」窗口 → 找画面子窗口 `kMiChildSharedWindow` → 截图 / 点击 / 滑动 / 长按 / 键盘 / 剪贴板。所有参数走 JSON 请求文件，结果写 JSON 结果文件（避免中文控制台编码问题）。
+- `mcp/server.mjs` — MCP stdio 服务，把 `phone_wake / phone_info / phone_see / phone_do` 四个工具暴露给 DSH，负责参数校验、三档权限闸门、帧文件复用。
 - `index.js` — DSH 插件入口，注册 `mi-phone` 技能 + 挂载上面的 MCP server。
 - `cli.mjs` — 不依赖工具投影的命令行入口，调试用。
 - `skill-content.mjs` — 技能正文（给模型看的操作规范）。
@@ -160,10 +162,25 @@
 
 清理后行数：`mi-phone.ps1` 1230 → 约 1040 行。
 
+## D13 唤起与解锁规范
+
+- 新增 `phone_wake`：先查找已有小米互联窗口；找不到时尝试从常见安装位置启动 `XiaomiPcManager`；窗口最小化时恢复；等待 `kMiChildSharedWindow` 出现。
+- `phone_wake` 只确认 Windows 端画面窗口存在，**不确认手机已解锁**。成功固定返回 `unlockRequired:true` 和 `userPrompt`。
+- AI 必须先提醒主人手动完成指纹解锁，等待主人明确确认后才能继续 `phone_see`/`phone_do`。插件不操作锁屏、授权、配对或系统确认。
+- 等待画面超时返回 `awaiting-phone-screen`，此时不要求解锁，先让主人检查投屏/连接。
+- `clip:"@restore"` 是剪贴板恢复；窗口恢复是 `phone_wake` 或底层 `restore`，两者不同。
+
+## D14 提交前敏感信息检查
+
+- 不把用户名、绝对工作区路径、外部项目路径、令牌、密码、手机号、聊天内容写入插件源文件或文档。
+- XiaomiPcManager 的路径只按 Windows 常见安装目录运行时解析，不把本机具体版本目录写死。
+- 提交前使用文本搜索和 `git diff --check` 检查；仅本地提交，不配置 remote、不推送。
+
 ## D12 变更记录
 
 | 版本 | 内容 |
 |---|---|
+| 0.3.2 | 新增 `phone_wake` 与手动指纹解锁提醒；修复顶层 `clip:"@restore"`；增加敏感信息清理规则 |
 | 0.3.1 | 清理死代码（见 D11b）；`openmenu` 传值修复；文档同步 |
 | 0.3.0 | 长按补 MOVE 心跳；菜单差分定位；`inserted` 校验；`openmenu` 两段式输入；`@restore` 剪贴板还原；中文不再盲点菜单 |
 | 0.2.0 | 改 MCP stdio 挂载；新增 `verify`；三档权限；帧文件复用 |

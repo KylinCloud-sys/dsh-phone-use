@@ -3,8 +3,8 @@
   dsh-mi-phone-use 底层执行器：小米互联（跨屏协作）手机窗口的全后台操控。
 
 .DESCRIPTION
-  设计参照 D:\Bullet-Trader\phone_trader\delta_trader\window.py 与 background_capture.py
-  （只读参考，未修改其任何文件）：
+  设计参照同类 Windows 窗口后台操控实现
+  （只读参考，未修改外部文件）：
     - 父窗口按标题「跨屏协作 / 妙享桌面」定位；
     - 画面子窗口取可见面积最大、层级最深的子孙（默认 kMiChildSharedWindow）；
     - 坐标基准 = 子窗口 client 区（就是标定 GUI 里「不带边框」的那个尺寸）；
@@ -808,6 +808,113 @@ function Invoke-Key($target, [string]$name, [int]$n) {
 }
 
 # ---------------------------------------------------------------------------
+# 唤起 / 恢复小米互联
+# ---------------------------------------------------------------------------
+function Resolve-XiaomiExecutable([string]$launchPath) {
+  if ($launchPath) {
+    $candidate = [IO.Path]::GetFullPath($launchPath)
+    if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+    throw "找不到指定的小米互联程序：$candidate"
+  }
+
+  # 优先使用已经运行的进程路径；否则在常见安装位置找官方客户端。
+  try {
+    $running = Get-Process -Name 'XiaomiPcManager' -ErrorAction SilentlyContinue |
+      Where-Object { $_.Path } | Select-Object -First 1
+    if ($running -and (Test-Path -LiteralPath $running.Path -PathType Leaf)) { return $running.Path }
+  } catch { }
+  $patterns = @(
+    (Join-Path ${env:ProgramFiles} 'MI\XiaomiPCManager\*\XiaomiPcManager.exe'),
+    (Join-Path ${env:ProgramFiles(x86)} 'MI\XiaomiPCManager\*\XiaomiPcManager.exe'),
+    (Join-Path $env:LOCALAPPDATA 'MI\XiaomiPCManager\*\XiaomiPcManager.exe')
+  )
+  foreach ($pattern in $patterns) {
+    if (-not $pattern) { continue }
+    $found = Get-ChildItem -Path $pattern -File -ErrorAction SilentlyContinue |
+      Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($found) { return $found.FullName }
+  }
+  return $null
+}
+
+function Invoke-Wake($spec, $req) {
+  $timeoutMs = 15000
+  if ($null -ne $req.timeoutMs) { $timeoutMs = [int]$req.timeoutMs }
+  $timeoutMs = [int][math]::Max(3000, [math]::Min(60000, $timeoutMs))
+  $launchPath = [string]$req.launchPath
+  $parent = [MiPhone.Native]::FindParent($spec.Titles, $spec.ParentClass)
+  $started = $false
+  $clientRunning = $false
+  $restored = $false
+  $launchError = $null
+
+  if ($parent -eq [IntPtr]::Zero) {
+    # 客户端已有进程时不要重复启动；它可能仍在连接/创建投屏窗口。
+    try {
+      $existing = Get-Process -Name 'XiaomiPcManager' -ErrorAction SilentlyContinue | Select-Object -First 1
+      $clientRunning = $null -ne $existing
+    } catch { $clientRunning = $false }
+    if (-not $clientRunning) {
+      $exe = Resolve-XiaomiExecutable $launchPath
+    }
+    if (-not $clientRunning -and -not $exe) {
+      return @{
+        ok = $false; action = 'wake'; state = 'client-not-found'
+        unlockRequired = $false
+        error = '找不到小米互联客户端。请先安装/启动 XiaomiPcManager，或在 wake 请求中提供 launchPath。'
+      }
+    }
+    if (-not $clientRunning) {
+      try {
+        # 最小化启动，避免唤起时抢占用户当前窗口；不模拟点击、不修改手机状态。
+        Start-Process -FilePath $exe -WindowStyle Minimized | Out-Null
+        $started = $true
+      } catch {
+        $launchError = $_.Exception.Message
+      }
+    }
+  }
+
+  $deadline = (Get-Date).AddMilliseconds($timeoutMs)
+  while ((Get-Date) -lt $deadline) {
+    if ($parent -eq [IntPtr]::Zero) { $parent = [MiPhone.Native]::FindParent($spec.Titles, $spec.ParentClass) }
+    if ($parent -ne [IntPtr]::Zero) {
+      if ([MiPhone.Native]::IsIconic($parent)) {
+        [void][MiPhone.Native]::ShowWindow($parent, 4) # SW_SHOWNOACTIVATE：恢复但不抢前台
+        $restored = $true
+      }
+      $child = [MiPhone.Native]::FindChild($parent, $spec.ChildClass)
+      if ($child -eq [IntPtr]::Zero) { $child = [MiPhone.Native]::FindChild($parent, '') }
+      if ($child -ne [IntPtr]::Zero) {
+        $target = @{ Parent = $parent; Child = $child }
+        $info = Get-WindowInfo $target
+        $info.action = 'wake'
+        $info.state = if ($started) { 'started' } elseif ($restored) { 'restored' } else { 'ready' }
+        $info.surface = 'available'
+        $info.started = $started
+        $info.restored = $restored
+        # 只能确认 Windows 端画面存在，不能从窗口存在性推断手机已解锁。
+        $info.unlockRequired = $true
+        $info.unlockState = 'unknown'
+        $info.userPrompt = '小米互联画面已唤起。请主人在手机上手动完成指纹解锁；解锁完成前不要继续操作。插件不会代为解锁。'
+        return $info
+      }
+    }
+    Start-Sleep -Milliseconds 500
+  }
+
+  if ($launchError) {
+    return @{ ok = $false; action = 'wake'; state = 'launch-failed'; started = $false; unlockRequired = $false; error = "启动小米互联失败：$launchError" }
+  }
+  return @{
+    ok = $false; action = 'wake'; state = 'awaiting-phone-screen'; started = $started; restored = $restored
+    unlockRequired = $false
+    userActionRequired = '请确认小米互联已投出手机画面；画面出现后再由主人手动完成指纹解锁。插件不会点击锁屏或授权按钮。'
+    error = '小米互联客户端已唤起，但等待手机画面子窗口超时。'
+  }
+}
+
+# ---------------------------------------------------------------------------
 # 主流程
 # ---------------------------------------------------------------------------
 $result = $null
@@ -815,10 +922,14 @@ try {
   $raw = [System.IO.File]::ReadAllText($RequestFile, [System.Text.Encoding]::UTF8)
   $req = $raw | ConvertFrom-Json
   $action = [string]$req.action
+  $spec = Resolve-WindowSpec $req.win
 
-  $target = Resolve-Target (Resolve-WindowSpec $req.win)
+  if ($action -eq 'wake') {
+    $result = Invoke-Wake $spec $req
+  } else {
+    $target = Resolve-Target $spec
 
-  switch ($action) {
+    switch ($action) {
     'info' { $result = Get-WindowInfo $target }
     'restore' {
       $parent = $target.Parent
@@ -879,7 +990,23 @@ try {
     }
     'clip' {
       # 只操作本机剪贴板（互联会同步到手机），不触发任何手机动作
-      if ($null -ne $req.value) {
+      $bak = Join-Path (Join-Path $env:TEMP 'dsh-mi-phone-use') 'clip-backup.txt'
+      if ($null -ne $req.value -and ([string]$req.value) -eq '@restore') {
+        if (Test-Path $bak) {
+          $prev = [IO.File]::ReadAllText($bak, [System.Text.UTF8Encoding]::new($false))
+          Set-Clipboard -Value $prev -ErrorAction Stop
+          Remove-Item $bak -Force -ErrorAction SilentlyContinue
+          $result = @{ ok = $true; clip = 'restored'; n = $prev.Length }
+        } else {
+          $result = @{ ok = $true; clip = 'nothing-to-restore' }
+        }
+      } elseif ($null -ne $req.value) {
+        if (-not (Test-Path $bak)) {
+          try {
+            $prev = Get-Clipboard -Raw -ErrorAction Stop
+            [IO.File]::WriteAllText($bak, $prev, [System.Text.UTF8Encoding]::new($false))
+          } catch { }
+        }
         Set-Clipboard -Value ([string]$req.value) -ErrorAction Stop
         $result = @{ ok = $true; clip = 'set'; n = ([string]$req.value).Length }
       } else {
@@ -1034,7 +1161,8 @@ try {
         $result.hit = $null
       }
     }
-    default { throw "unknown action: $action" }
+      default { throw "unknown action: $action" }
+    }
   }
 } catch {
   $result = @{ ok = $false; error = $_.Exception.Message; type = $_.Exception.GetType().Name }
