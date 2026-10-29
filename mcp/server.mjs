@@ -174,7 +174,8 @@ const TOOLS = [
             restored: !!r.restored,
             unlockRequired: false,
             errorPage: r.errorPage,
-            animating: r.animating,
+            ocrAvailable: r.ocrAvailable,
+            ocrHint: r.ocrHint,
             error: r.error,
             userActionRequired: r.userActionRequired,
           },
@@ -193,6 +194,8 @@ const TOOLS = [
           restored: !!r.restored,
           unlockRequired: r.unlockRequired === true,
           unlockState: r.unlockState,
+          ocrAvailable: r.ocrAvailable,
+          ocrHint: r.ocrHint,
           userPrompt: r.userPrompt,
         },
       }
