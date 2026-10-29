@@ -1,4 +1,4 @@
-﻿# dsh-phone-use
+# dsh-phone-use
 
 DeepSeek Harness 插件：在**后台**操控手机——截图、点击、滑动、输入。
 

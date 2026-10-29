@@ -1,4 +1,4 @@
-﻿# 开发日志 · dsh-phone-use
+# 开发日志 · dsh-phone-use
 
 > 这份文件只给维护者看。使用者请读 [README.md](README.md)。
 >

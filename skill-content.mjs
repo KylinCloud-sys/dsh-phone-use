@@ -1,4 +1,4 @@
-﻿// 技能正文（index.js 与 mcp/dsh-plugin.mjs 共用）
+// 技能正文（index.js 与 mcp/dsh-plugin.mjs 共用）
 export const SKILL_CONTENT = `# 手机操控（dsh-phone-use）
 
 > 工具名可能是 phone_info 或 mcp__phone__phone_info（取决于挂载方式），按实际可用名调用。
