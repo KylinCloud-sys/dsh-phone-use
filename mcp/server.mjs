@@ -137,7 +137,7 @@ function normalizeSteps(steps) {
     else if (raw.text !== undefined) out.push({ op: 'text', value: String(raw.text), at: raw.at ? String(raw.at) : '', menu: raw.menu ? String(raw.menu) : '', danger })
     else if (raw.key !== undefined) out.push({ op: 'key', name: String(raw.key), n: raw.n ?? 1, danger })
     else if (raw.wait !== undefined) out.push({ op: 'wait', ms: Number(raw.wait) || 300 })
-    else if (raw.clip !== undefined) out.push({ op: 'clip', value: raw.clip === true || raw.clip === 'read' ? null : String(raw.clip) })
+    else if (raw.clip !== undefined) out.push({ op: 'clip', value: raw.clip === true || raw.clip === 'read' ? null : String(raw.clip) })  // '@restore' 原样传给 PS 层判断
     else throw new Error(`无法识别的步骤：${JSON.stringify(raw)}`)
   }
   return out

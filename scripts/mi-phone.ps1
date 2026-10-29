@@ -770,7 +770,8 @@ function Invoke-PasteAt($target, [string]$text, [string]$at, [string]$menu, [int
   $client = Get-ClientInfo $target.Child
   $ptA = ConvertTo-Point $at $client
   $ptM = ConvertTo-Point $menu $client
-  if ($holdMs -le 0) { $holdMs = 800 }
+  # 主人实测：长按太短会退化成普通点击、菜单不弹；默认 1200ms。
+  if ($holdMs -le 0) { $holdMs = 1200 }
   $shotDir = Join-Path $env:TEMP 'dsh-mi-phone-use'
   if (-not (Test-Path $shotDir)) { New-Item -ItemType Directory -Path $shotDir -Force | Out-Null }
   $preShot = Join-Path $shotDir 'paste-pre.png'
@@ -821,7 +822,7 @@ function Invoke-Text($target, [string]$text, [string]$at, [string]$menu) {
     if (-not $menu) {
       # 菜单项的个数、顺序、位置每个 App 都不一样（见过「AI写作/粘贴/常用语」，也见过「粘贴/常用语」）。
       # 不猜、不逐个试：只把菜单弹出来并回一张菜单截图，等人（或模型）看一眼「粘贴」在哪，再带 menu 点。
-      return (Invoke-OpenMenu $target $at 800 $text)
+      return (Invoke-OpenMenu $target $at 0 $text)   # 0 = 用默认长按时长（1200ms）
     }
     return (Invoke-PasteAt $target $text $at $menu 800)
   }
@@ -838,7 +839,8 @@ function Invoke-Text($target, [string]$text, [string]$at, [string]$menu) {
 function Invoke-OpenMenu($target, [string]$at, [int]$holdMs, [string]$text) {
   $client = Get-ClientInfo $target.Child
   $ptA = ConvertTo-Point $at $client
-  if ($holdMs -le 0) { $holdMs = 800 }
+  # 主人实测：长按太短会退化成普通点击、菜单不弹；默认 1200ms。
+  if ($holdMs -le 0) { $holdMs = 1200 }
   $shotDir = Join-Path $env:TEMP 'dsh-mi-phone-use'
   if (-not (Test-Path $shotDir)) { New-Item -ItemType Directory -Path $shotDir -Force | Out-Null }
   $bakPath = Join-Path $shotDir 'clip-backup.txt'
@@ -852,7 +854,8 @@ function Invoke-OpenMenu($target, [string]$at, [int]$holdMs, [string]$text) {
   }
   if (-not [string]::IsNullOrEmpty($text)) {
     Set-Clipboard -Value $text -ErrorAction Stop
-    Start-Sleep -Milliseconds 1500     # 等互联把剪贴板同步到手机，否则菜单里没有「粘贴」
+    # 等互联把剪贴板同步到手机，否则菜单里不会出现「粘贴」。主人实测不到 1 秒即可，留 1.5s 余量。
+    Start-Sleep -Milliseconds 1500
   }
 
   $preShot = Join-Path $shotDir 'menu-pre.png'
@@ -1531,15 +1534,35 @@ try {
     }
     'clip' {
       $bak = Join-Path $env:TEMP 'dsh-mi-phone-use\clip-backup.txt'
-      if ($null -ne $req.value) {
+      $val = if ($null -ne $req.value) { [string]$req.value } else { $null }
+      # "@restore" 是还原指令，不是要写入的文本。此前漏判会把字面量写进剪贴板。
+      if ($val -eq '@restore') {
+        $restored = $false
+        $reason = 'no-backup'
+        if (Test-Path $bak) {
+          try {
+            $prev = [IO.File]::ReadAllText($bak)
+            # 备份可能是空字符串（备份时剪贴板本来就空）。Set-Clipboard 不接受空串，要特殊处理。
+            if ([string]::IsNullOrEmpty($prev)) {
+              try { Set-Clipboard -Value $null -ErrorAction Stop } catch { }
+            } else {
+              Set-Clipboard -Value $prev -ErrorAction Stop
+            }
+            Remove-Item $bak -Force -ErrorAction SilentlyContinue
+            $restored = $true
+            $reason = 'ok'
+          } catch { $reason = $_.Exception.Message }
+        }
+        $result = @{ ok = $true; clip = 'restored'; restored = $restored; reason = $reason }
+      } elseif ($null -ne $val) {
         if (-not (Test-Path $bak)) {
           try {
             $prev = Get-Clipboard -Raw -ErrorAction Stop
             [IO.File]::WriteAllText($bak, $prev, [System.Text.UTF8Encoding]::new($false))
           } catch { }
         }
-        Set-Clipboard -Value ([string]$req.value) -ErrorAction Stop
-        $result = @{ ok = $true; clip = 'set'; n = ([string]$req.value).Length }
+        Set-Clipboard -Value $val -ErrorAction Stop
+        $result = @{ ok = $true; clip = 'set'; n = $val.Length }
       } else {
         $text = $null
         try { $text = Get-Clipboard -Raw -ErrorAction Stop } catch { $text = '' }
@@ -1547,9 +1570,12 @@ try {
       }
     }
     'openmenu' {
-      $hold = 900
+      $hold = 0    # 0 = 用默认长按时长（1200ms）
       if ($null -ne $req.ms) { $hold = [int]$req.ms }
-      $r = Invoke-OpenMenu $target ([string]$req.at) $hold ([string]$req.value)
+      # MCP 层传的是 text 字段（顶层 openmenu 和 batch 里的 openmenu 都用 text），
+# 此前这里读 $req.value 导致文字为空、剪贴板没更新，粘贴出来是上一次的旧内容。
+      $omText = if ($null -ne $req.text) { [string]$req.text } elseif ($null -ne $req.value) { [string]$req.value } else { '' }
+      $r = Invoke-OpenMenu $target ([string]$req.at) $hold $omText
       $result = Get-WindowInfo $target
       $result.did = $r
     }
@@ -1605,7 +1631,7 @@ try {
           }
           'openmenu' {
             $po = ConvertTo-Point $st.at $client
-            $mo = 900
+            $mo = 0   # 0 = 用默认长按时长
             if ($null -ne $st.ms) { $mo = [int]$st.ms }
             $om = Invoke-OpenMenu $target ([string]$st.at) $mo ([string]$st.text)
             [void]$log.Add(@{ op = 'openmenu'; at = [string]$st.at; opened = $om.opened; box = $om.box; crop = $om.crop })
