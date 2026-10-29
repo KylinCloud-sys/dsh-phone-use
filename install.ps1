@@ -114,6 +114,6 @@ if (Test-Path $linked) {
 }
 
 Write-Host ""
-Write-Host "下一步：重启 DSH。启动后应出现 phone_info / phone_see / phone_do 三个工具与技能 mi-phone。" -ForegroundColor Cyan
+Write-Host "下一步：重启 DSH。启动后应出现 phone_wake / phone_info / phone_see / phone_do 四个工具与技能 mi-phone。" -ForegroundColor Cyan
 Write-Host "自检日志: $env:TEMP\dsh-mi-phone-use\plugin-boot.log"
 Write-Host "权限档位: 改 $pkgDir\config.json 里的 permission，即时生效无需重启。"

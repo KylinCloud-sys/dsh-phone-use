@@ -553,7 +553,7 @@ function Invoke-Capture($target, [string]$out, [string]$prev, $region, [int]$max
       # 解锁提示页：蓝色插图够大 + 有黑色标题字
       $result.unlockPage = ($result.blank -and $blueWide -ge 0.30 -and $blueTall -ge 0.15 -and ($darkCount / [double]$n) -gt 0.001)
       # 加载失败页：有蓝字但没有大插图
-      $result.errorPage = $result.blank -and (-not $result.unlockPage) -and (($darkCount / [double]$n) -gt 0.001) -and (($blueCount / [double]$n) -gt 0.0002)
+      $result.errorPage = $result.blank -and (-not $result.unlockPage)
     }
   } catch { }
 
@@ -1045,7 +1045,7 @@ function Get-SurfaceStats($target) {
         blueWide = [math]::Round($bw2, 3)
         blueTall = [math]::Round($bt2, 3)
         unlockPage = (($dominant -ge 0.94) -and $bw2 -ge 0.30 -and $bt2 -ge 0.15 -and ($darkCount / [double]$n) -gt 0.001)
-        errorPage = (($dominant -ge 0.94) -and -not ($bw2 -ge 0.30 -and $bt2 -ge 0.15)) -and (($darkCount / [double]$n) -gt 0.001) -and (($blueCount / [double]$n) -gt 0.0002)
+        errorPage = (((($dominant -ge 0.94) -or (($darkCount / [double]$n) -ge 0.60))) -and -not ($bw2 -ge 0.30 -and $bt2 -ge 0.15))
       }
     } finally { $bmp.Dispose() }
   } catch {
@@ -1205,47 +1205,27 @@ function Invoke-Wake($spec, $req) {
   if (-not $castRunning) {
     $hoExe = Resolve-ScreenShareExecutable 'MiSmartShareHandoff.exe'
     if ($hoExe) {
-      $devName = [string]$req.deviceName
-      $devId = [string]$req.deviceId
-      # 没显式传就回退到 config.json 的 cast.deviceName / cast.deviceId（本机私有，不入库）
-      if (-not $devId -or -not $devName) {
+      # 不需要设备 ID / 设备名：只要以管家为父进程拉起 Handoff，管家会自己找到已连接的设备。
+      $hoArgs = @("--CastBusinessType=`"1`"")
+      try {
+        $mgrPid = 0
         try {
-          $cfgPath = Join-Path $PSScriptRoot '..\config.local.json'
-          if (Test-Path -LiteralPath $cfgPath) {
-            $cfg = [IO.File]::ReadAllText($cfgPath) | ConvertFrom-Json
-            if (-not $devId -and $cfg.cast -and $cfg.cast.deviceId) { $devId = [string]$cfg.cast.deviceId }
-            if (-not $devName -and $cfg.cast -and $cfg.cast.deviceName) { $devName = [string]$cfg.cast.deviceName }
-          }
+          $m = Get-Process -Name 'XiaomiPcManager' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($m) { $mgrPid = [int]$m.Id }
         } catch { }
-      }
-      if ($devId) {
-        $hoArgs = @("--CastBusinessType=`"1`"")
-        if ($devName) { $hoArgs += "--DeviceName=`"$devName`"" }
-        $hoArgs += "--DeviceID=`"$devId`""
-        try {
-          $mgrPid = 0
-          try {
-            $m = Get-Process -Name 'XiaomiPcManager' -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($m) { $mgrPid = [int]$m.Id }
-          } catch { }
-          $cmdLine = '"' + $hoExe + '" ' + ($hoArgs -join ' ')
-          $spawnResult = $null
-          if ($mgrPid -gt 0) {
-            # 以管家为父进程启动：子进程能继承管家的管道/句柄，投屏握手才成立。
-            # 直接由 PowerShell 启动会变成孤儿进程，窗口虽在但内容渲染不出来、点也没反应。
-            try { $spawnResult = Start-ProcessWithParent $mgrPid $hoExe $cmdLine } catch { $spawnResult = $null }
-          }
-          if (-not ($spawnResult -like 'OK|*')) {
-            # 回退：普通启动（可能不完整，但至少给主人一个窗口去点）
-            Start-Process -FilePath $hoExe -ArgumentList $hoArgs -WindowStyle Minimized | Out-Null
-          }
-          $started = $true
-        } catch { $launchError = $_.Exception.Message }
-      } else {
-        # 没有设备信息就交给管家 UI，不盲启动
-        $launchError = '缺少 deviceId，无法后台发起投屏；请主人点一次任务栏「妙享桌面」图标。'
-      }
-    }
+        $cmdLine = '"' + $hoExe + '" ' + ($hoArgs -join ' ')
+        $spawnResult = $null
+        if ($mgrPid -gt 0) {
+          # 以管家为父进程启动：子进程能继承管家的管道/句柄，投屏握手才成立。
+          # 直接由 PowerShell 启动会变成孤儿进程，窗口虽在但内容渲染不出来、点也没反应。
+          try { $spawnResult = Start-ProcessWithParent $mgrPid $hoExe $cmdLine } catch { $spawnResult = $null }
+        }
+        if (-not ($spawnResult -like 'OK|*')) {
+          # 回退：普通启动（可能不完整，但至少给主人一个窗口去点）
+          Start-Process -FilePath $hoExe -ArgumentList $hoArgs -WindowStyle Minimized | Out-Null
+        }
+        $started = $true
+      } catch { $launchError = $_.Exception.Message }    }
   }
 
   $deadline = (Get-Date).AddMilliseconds($timeoutMs)
@@ -1350,8 +1330,11 @@ function Invoke-Wake($spec, $req) {
     # 2) 画面是否在动 —— 连接中有跳动圆点；注意桌面静止时也不动，故只作兜底
     $motion = $null
     if ($lastTarget) { $motion = Test-SurfaceAnimating $lastTarget 3 900 }
-    $isErrorPage = ($null -ne $lastStats -and $lastStats.errorPage -eq $true)
-    $connecting = (-not $isErrorPage) -and ($null -ne $motion -and $motion.animating)
+    # 连接页有跳动圆点（画面持续变化）；失败页是静态错误页（完全静止）。
+    # 主人实测确认：这是区分两者的可靠依据，颜色/包围盒都不可靠（圆点也是蓝色系）。
+    $animating = ($null -ne $motion -and $motion.animating -eq $true)
+    $isErrorPage = ($null -ne $lastStats -and $lastStats.errorPage -eq $true) -and (-not $animating)
+    $connecting = $animating -and (-not $isErrorPage)
     return @{
       ok = $false; action = 'wake'
       state = if ($connecting) { 'connecting' } else { 'connect-failed' }

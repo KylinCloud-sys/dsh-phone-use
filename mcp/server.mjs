@@ -161,15 +161,38 @@ const TOOLS = [
       const timeoutMs = Number.isFinite(Number(args.timeoutMs)) ? Number(args.timeoutMs) : 15000
       const bounded = Math.max(3000, Math.min(60000, Math.trunc(timeoutMs)))
       const r = await run({ action: 'wake', timeoutMs: bounded }, bounded + 15000)
-      if (r.ok === false) return { text: { ok: false, ...r } }
+      // 失败：把 state / deviceState / userActionRequired / error 原样透出，
+      // 调用方才能区分「设备不在场」「还在连」「连不上」「客户端缺失」。
+      if (r.ok === false) {
+        return {
+          text: {
+            ok: false,
+            action: 'wake',
+            state: r.state,
+            deviceState: r.deviceState,
+            started: !!r.started,
+            restored: !!r.restored,
+            unlockRequired: false,
+            errorPage: r.errorPage,
+            animating: r.animating,
+            error: r.error,
+            userActionRequired: r.userActionRequired,
+          },
+        }
+      }
+      // 成功：按真实状态透出，不能一律报 unlockRequired=true。
       return {
         text: {
           ok: true,
           action: 'wake',
+          state: r.state,
+          surface: r.surface,
           s: [r.screen.w, r.screen.h],
+          aspect: r.aspect,
           started: !!r.started,
           restored: !!r.restored,
-          unlockRequired: true,
+          unlockRequired: r.unlockRequired === true,
+          unlockState: r.unlockState,
           userPrompt: r.userPrompt,
         },
       }

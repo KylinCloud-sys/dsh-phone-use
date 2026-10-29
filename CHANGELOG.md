@@ -1,5 +1,22 @@
 # CHANGELOG
 
+## 0.3.7 — 2026-10-29
+
+- **修正连接页/失败页判据**：此前用「蓝字包围盒」区分，但连接页的彩色圆点（紫/粉/绿）也是蓝色系，会误判成失败页。改用主人实测的可靠依据——**连接页的圆点在动、失败页完全静止**。
+  - 占位页（几乎全白或整屏过暗）先判定；
+  - 占位页里若是「手机解锁」大插图 → `awaiting-unlock`；
+  - 否则看画面是否在动：在动 → `connecting`，静止 → `connect-failed`。
+- **修正 MCP 层硬编码**：`phone_wake` 曾一律返回 `unlockRequired: true` 且丢弃 `state`/`unlockState`；现在按真实状态透出，失败时完整返回 `state`/`deviceState`/`error`/`userActionRequired`。
+- 实测：连接页连续采样哈希每次变化（animating=true）→ `connecting`；失败页哈希完全一致 → `connect-failed`。
+
+## 0.3.6 — 2026-10-29
+
+- **去掉设备 ID 依赖**：实测 Handoff 只需 `--CastBusinessType=1` 即可，管家会自己找到已连接的设备。不再需要任何配置文件，安装即用。
+- 删除 `config.local.json` 及其 gitignore 条目。
+- `package.json` 的 `files` 补上 `install.ps1`（此前打包会漏）。
+- 修正 `install.ps1` 结束提示：工具数量由三个改为四个（含 `phone_wake`）。
+- README 安装前提同步更新，明确「不需要填设备 ID 或任何配置」。
+
 ## 0.3.5 — 2026-10-29
 
 - **实现全自动唤起**（主人实测流程）：
