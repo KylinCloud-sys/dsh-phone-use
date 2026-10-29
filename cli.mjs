@@ -113,6 +113,7 @@ function normalize(steps) {
       const [from, to] = String(raw.swipe).split('>').map((s) => s.trim())
       out.push({ op: 'swipe', from, to, ms: raw.ms ?? 300, danger })
     } else if (raw.longpress !== undefined) out.push({ op: 'longpress', at: String(raw.longpress), ms: raw.ms ?? 800, danger })
+    else if (raw.openmenu !== undefined) out.push({ op: 'openmenu', at: String(raw.openmenu), text: raw.text ? String(raw.text) : '', ms: raw.ms ?? 900 })
     else if (raw.text !== undefined) out.push({ op: 'text', value: String(raw.text), at: raw.at ? String(raw.at) : '', menu: raw.menu ? String(raw.menu) : '', danger })
     else if (raw.key !== undefined) out.push({ op: 'key', name: String(raw.key), n: raw.n ?? 1, danger })
     else if (raw.wait !== undefined) out.push({ op: 'wait', ms: Number(raw.wait) || 300 })
