@@ -26,7 +26,7 @@ DeepSeek Harness 插件：在**后台**操控小米手机——截图、点击�
 
 ## 安装
 
-前提：Windows 10/11、DSH 已启动过，并已完成小米互联与手机的配对/授权。插件可尝试启动 XiaomiPcManager、恢复最小化窗口并等待画面；它不能替手机完成配对、授权或建立首次连接。唤起成功后，必须由主人在手机上手动指纹解锁。
+前提：Windows 10/11、DSH 已启动过，并已完成小米互联与手机的配对/授权。插件可尝试启动 XiaomiPcManager、把被收起或推到屏幕外的「妙享桌面」窗口**纯后台**恢复出来（`SW_SHOWNOACTIVATE` + `SetWindowPos(SWP_NOACTIVATE)`，不抢焦点、不动鼠标）并等待画面；它不能替手机完成配对、授权或建立首次连接。唤起成功后，必须由主人在手机上手动指纹解锁。
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File install.ps1
@@ -54,7 +54,16 @@ powershell -ExecutionPolicy Bypass -File install.ps1 -Uninstall
 
 AI 应先调用 `phone_wake`。成功返回 `unlockRequired:true` 并给出 `userPrompt`，这只表示 Windows 端画面已找到，不表示手机已解锁。AI 必须提醒主人：**请在手机上手动完成指纹解锁**，等待主人明确回复“已解锁”后，才调用 `phone_see` 或 `phone_do`。插件不会点击锁屏、授权、配对或确认按钮。
 
-如果 `phone_wake` 返回 `awaiting-phone-screen`，说明客户端可能已启动但还没有手机画面子窗口；应让主人检查小米互联投屏/连接，不要盲目点击。
+`phone_wake` 的 `state` 是判断"设备在不在身边"的关键：
+
+| state | 含义 | 下一步 |
+|---|---|---|
+| `ready` / `restored` / `started` | 真实画面已就绪（非空白） | `unlockRequired:true`，请主人手动指纹解锁 |
+| `screen-not-projected` | 窗口在，但画面纯空白 → 投屏没建立 | 多半不在同一局域网；让主人检查同网、手机端已开启小米互联。**此时不需要解锁** |
+| `phone-not-found` | 连画面窗口都没有 | 设备不在附近或不在同一局域网 |
+| `client-not-found` / `launch-failed` | 客户端缺失或启动失败 | 请主人安装/手动打开一次 |
+
+`phone_see` 在画面空白时返回 `{"blank":true,"state":"screen-not-projected"}` 且**不回图片**，用来省 token：这种情况该提醒主人检查局域网，而不是催指纹解锁。
 
 ### 中文输入是怎么实现的
 

@@ -167,8 +167,28 @@
 - 新增 `phone_wake`：先查找已有小米互联窗口；找不到时尝试从常见安装位置启动 `XiaomiPcManager`；窗口最小化时恢复；等待 `kMiChildSharedWindow` 出现。
 - `phone_wake` 只确认 Windows 端画面窗口存在，**不确认手机已解锁**。成功固定返回 `unlockRequired:true` 和 `userPrompt`。
 - AI 必须先提醒主人手动完成指纹解锁，等待主人明确确认后才能继续 `phone_see`/`phone_do`。插件不操作锁屏、授权、配对或系统确认。
-- 等待画面超时返回 `awaiting-phone-screen`，此时不要求解锁，先让主人检查投屏/连接。
 - `clip:"@restore"` 是剪贴板恢复；窗口恢复是 `phone_wake` 或底层 `restore`，两者不同。
+
+## D13b 0.3.2 唤醒实现的实测缺陷与修正（0.3.3）
+
+实测发现旧实现会误报成功，根因有三条，均已修正：
+
+1. **窗口存在 ≠ 画面可用**。`妙享桌面-<设备>` 窗口即便处于最小化、`rect = -21333,-21333`、内容纯白，也会被 `FindParent` 之外的分支当成成功。现在增加空白检测（采样色数 ≤3 且亮度标准差 <6 → `blank`）。
+2. **`FindParent` 只看可见窗口**，而真实的投屏窗口常常被收起/推到屏幕外。现在唤醒与 `Resolve-Target` 都支持 `includeHidden`，找回后先 `RestoreNoActivate`。
+3. **最小化窗口的 `GetClientRect` 是 0x0**，直接算画面区会失败并报 `content child not found`。现在恢复到可见区后再测量。
+
+后台约束（来自主人明确要求，不得违反）：唤醒过程只用 `ShowWindow(SW_SHOWNOACTIVATE)` 与 `SetWindowPos(SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW)`；**不点任务栏图标、不点托盘菜单、不发 `SendInput`、不移动鼠标、不抢前台**。
+
+`state` 语义（用于判断设备是否在身边、并省 token）：
+
+| state | 判据 | unlockRequired |
+|---|---|---|
+| `ready` / `restored` / `started` | 找到画面且非空白 | `true` |
+| `screen-not-projected` | 找到窗口但画面空白 | `false`（先查局域网） |
+| `phone-not-found` | 连窗口都没有 | `false` |
+| `client-not-found` / `launch-failed` | 客户端缺失/启动失败 | `false` |
+
+`phone_see` 遇空白返回 `{"blank":true,"state":"screen-not-projected"}` 且不回传图片。
 
 ## D14 提交前敏感信息检查
 
@@ -180,6 +200,7 @@
 
 | 版本 | 内容 |
 |---|---|
+| 0.3.3 | 修正唤醒误报：空白检测 + 隐藏窗口找回 + 全后台 `RestoreNoActivate`；新增 `screen-not-projected`/`phone-not-found` 状态；`phone_see` 空白不回图 |
 | 0.3.2 | 新增 `phone_wake` 与手动指纹解锁提醒；修复顶层 `clip:"@restore"`；增加敏感信息清理规则 |
 | 0.3.1 | 清理死代码（见 D11b）；`openmenu` 传值修复；文档同步 |
 | 0.3.0 | 长按补 MOVE 心跳；菜单差分定位；`inserted` 校验；`openmenu` 两段式输入；`@restore` 剪贴板还原；中文不再盲点菜单 |

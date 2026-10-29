@@ -1,5 +1,14 @@
 # CHANGELOG
 
+## 0.3.3 — 2026-10-29
+
+- **修正 0.3.2 的误报**：之前只要找到窗口就报唤醒成功，实测把屏幕外（`-21333,-21333`）、最小化、内容纯白的空壳窗口当成了可用画面。
+- `phone_wake` 改为**纯后台**恢复：只用 `ShowWindow(SW_SHOWNOACTIVATE)` + `SetWindowPos(SWP_NOACTIVATE)`，不点任务栏/托盘、不发 `SendInput`、不动鼠标、不抢焦点。
+- 新增空白检测：采样色数 ≤3 且亮度标准差 <6 判定为空白，此时返回 `state:"screen-not-projected"` + `deviceState:"not-connected"`，并说明"多半不在同一局域网，此时不需要指纹解锁"；连窗口都没有则返回 `phone-not-found`，用于判断设备不在身边。
+- `Resolve-Target` / `restore` 也改走后台恢复：被收起或推到屏幕外的窗口能找回，不再报 `content child not found`。
+- `phone_see` 在画面空白时返回 `{"blank":true,"state":"screen-not-projected"}` 且不回图片，省 token。
+- 同步 README / DEVLOG / skill 文档的 `state` 语义表。
+
 ## 0.3.2 — 2026-10-29
 
 - 新增 `phone_wake`：后台尝试启动 XiaomiPcManager、恢复最小化窗口，并等待手机画面子窗口。

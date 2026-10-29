@@ -26,7 +26,13 @@ export const SKILL_CONTENT = `# 小米互联手机操控（dsh-mi-phone-use）
 ## 工具
 
 ### phone_wake
-唤起/恢复小米互联并等待手机画面。成功返回 \`unlockRequired:true\`；这不是已解锁证明。先告诉主人“请在手机上手动指纹解锁”，等待主人明确确认后，才调用 \`phone_see\` 或 \`phone_do\`。失败时按 \`state/error\` 如实报告，不盲目点击。
+全后台唤起/恢复小米互联并等待真实手机画面。**只用窗口 API，不点任务栏/托盘、不 SendInput、不动鼠标、不抢焦点。**
+返回里先看 \`state\`：
+- \`ready\` / \`restored\` / \`started\` → 画面已就绪，\`unlockRequired:true\`：先告诉主人“请在手机上手动指纹解锁”，等主人明确确认后再 \`phone_see\`/\`phone_do\`。**这不是已解锁证明**，插件绝不代点锁屏/授权/配对。
+- \`screen-not-projected\` → 窗口在但画面是空白，说明投屏没连上（多半手机不在同一局域网）。让主人确认手机与电脑同网、手机端小米互联已开启；**此时不需要指纹解锁**。
+- \`phone-not-found\` → 连窗口都没有，基本可判定设备不在身边或不在同一局域网。
+- \`client-not-found\` / \`launch-failed\` → 客户端缺失或启动失败。
+按 \`deviceState\`（\`not-connected\` 等）直接判断“设备可能不在附近”，**不要**反复重试或盲点。
 
 ### phone_info
 体检：窗口在不在、画面区多大、是否最小化、前后台。约 60 tokens，**只在开头或怀疑出问题时调**。
@@ -36,6 +42,7 @@ export const SKILL_CONTENT = `# 小米互联手机操控（dsh-mi-phone-use）
 - \`image\`：\`auto\`（默认）/ \`full\` / \`none\`
 - \`region\`："x,y,w,h" 百分比，只看一块（翻列表、看输入框周围时用）
 - 没变化时返回 \`{"ok":true,"ch":false}\`，**不带图**，几乎不花 token
+- 画面空白（投屏没建立）返回 \`{"blank":true,"state":"screen-not-projected"}\`，同样**不带图**；这时该提醒主人检查是否同一局域网，而不是等指纹解锁
 
 ### phone_do
 一次执行多步，**这是省 token 的主力**。

@@ -64,6 +64,9 @@ namespace MiPhone
         [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr h, ref POINT p);
         [DllImport("user32.dll")] public static extern IntPtr GetParent(IntPtr h);
         [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
+        [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
+        [DllImport("user32.dll")] public static extern bool IsZoomed(IntPtr h);
+        [DllImport("user32.dll")] public static extern int GetSystemMetrics(int index);
         [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr hdc, uint flags);
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr SendMessage(IntPtr h, uint msg, IntPtr w, IntPtr l);
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern bool PostMessage(IntPtr h, uint msg, IntPtr w, IntPtr l);
@@ -78,13 +81,15 @@ namespace MiPhone
         public static string TitleOf(IntPtr h) { var sb = new StringBuilder(512); GetWindowText(h, sb, 512); return sb.ToString(); }
 
         // 父窗口：class 命中优先，其次标题精确，再次标题前缀（「妙享桌面-设备名」会变长）
-        public static IntPtr FindParent(string[] titles, string className)
+        // includeHidden=true 时把不可见/最小化窗口也纳入（唤醒场景需要找回被推到屏幕外的窗口）
+        public static IntPtr FindParent(string[] titles, string className) { return FindParent(titles, className, false); }
+        public static IntPtr FindParent(string[] titles, string className, bool includeHidden)
         {
             IntPtr best = IntPtr.Zero;
             int bestScore = 0;
             EnumWindows((h, l) =>
             {
-                if (!IsWindowVisible(h)) return true;
+                if (!includeHidden && !IsWindowVisible(h)) return true;
                 string cls = ClassOf(h);
                 string title = TitleOf(h);
                 int score = 0;
@@ -99,6 +104,24 @@ namespace MiPhone
                 return true;
             }, IntPtr.Zero);
             return bestScore >= 3 ? best : IntPtr.Zero;
+        }
+
+        // 纯后台恢复：不激活、不抢焦点、不动鼠标。返回是否做过恢复动作。
+        public static bool RestoreNoActivate(IntPtr h)
+        {
+            bool acted = false;
+            if (IsIconic(h)) { ShowWindow(h, 4); acted = true; }   // SW_SHOWNOACTIVATE
+            RECT r;
+            GetWindowRect(h, out r);
+            int sw = GetSystemMetrics(0), sh = GetSystemMetrics(1);
+            int w = r.Right - r.Left, hgt = r.Bottom - r.Top;
+            if (w <= 0 || hgt <= 0) { w = 1024; hgt = 640; }        // 最小化状态的 rect 不可信
+            if (!acted && r.Left > -30000 && r.Top > -30000 && w > 0 && hgt > 0) return false;
+            // 被推到屏幕外（如 -21333,-21333）时挪回可见区中心，仍不激活
+            const uint SWP_NOACTIVATE = 0x0010, SWP_NOZORDER = 0x0004, SWP_SHOWWINDOW = 0x0040;
+            int x = Math.Max(0, (sw - w) / 2), y = Math.Max(0, (sh - hgt) / 2);
+            SetWindowPos(h, IntPtr.Zero, x, y, w, hgt, SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW);
+            return true;
         }
 
         // 画面子窗口：可见面积最大，面积相同取层级更深的
@@ -335,17 +358,31 @@ function Resolve-Target($spec) {
   if ($null -eq $spec) { $spec = Resolve-WindowSpec $null }
   $parent = [MiPhone.Native]::FindParent($spec.Titles, $spec.ParentClass)
   if ($parent -eq [IntPtr]::Zero) {
+    # 窗口被收起/推到屏幕外时也能找回；纯后台恢复，不激活、不抢焦点。
+    $parent = [MiPhone.Native]::FindParent($spec.Titles, $spec.ParentClass, $true)
+  }
+  if ($parent -eq [IntPtr]::Zero) {
     $hint = ($spec.Titles -join ' / ')
     throw "window not found: $hint（请先打开小米互联的手机画面）"
+  }
+  if ([MiPhone.Native]::IsIconic($parent)) {
+    [void][MiPhone.Native]::RestoreNoActivate($parent)
+    Start-Sleep -Milliseconds 300
   }
   $child = [MiPhone.Native]::FindChild($parent, $spec.ChildClass)
   if ($child -eq [IntPtr]::Zero) {
     $child = [MiPhone.Native]::FindChild($parent, '')
-    if ($child -eq [IntPtr]::Zero) { throw 'content child not found: 父窗口下没有可见子窗口（手机画面可能未投出来）' }
+  }
+  if ($child -eq [IntPtr]::Zero) {
+    # 部分版本把手机画面直接画在「妙享桌面」自身，没有子窗口。
+    $self = Get-ClientInfo $parent
+    if ($self.W -ge 100 -and $self.H -ge 100) { $child = $parent }
+  }
+  if ($child -eq [IntPtr]::Zero) {
+    throw 'content child not found: 父窗口下没有可见子窗口（手机画面可能未投出来）'
   }
   return @{ Parent = $parent; Child = $child }
 }
-
 function Get-ClientInfo([IntPtr]$child) {
   $cr = New-Object 'MiPhone.Native+RECT'
   [void][MiPhone.Native]::GetClientRect($child, [ref]$cr)
@@ -454,6 +491,28 @@ function Invoke-Capture($target, [string]$out, [string]$prev, $region, [int]$max
   $hash = [MiPhone.Img]::Hash($crop)
 
   $result = @{ w = $crop.Width; h = $crop.Height; hash = $hash; changed = $true; box = $null }
+
+  # 空白检测：采样色数与亮度标准差都很低 → 投屏没真正建立（省下无用的白图）
+  try {
+    $stepX = [math]::Max(1, [int]($crop.Width / 48))
+    $stepY = [math]::Max(1, [int]($crop.Height / 48))
+    $colors = New-Object 'System.Collections.Generic.HashSet[string]'
+    $sum = 0.0; $sum2 = 0.0; $n = 0
+    for ($sy = 0; $sy -lt $crop.Height; $sy += $stepY) {
+      for ($sx = 0; $sx -lt $crop.Width; $sx += $stepX) {
+        $c = $crop.GetPixel($sx, $sy)
+        $v = ($c.R + $c.G + $c.B) / 3.0
+        $sum += $v; $sum2 += $v * $v; $n++
+        [void]$colors.Add("$([int]($c.R / 16)):$([int]($c.G / 16)):$([int]($c.B / 16))")
+      }
+    }
+    if ($n -gt 0) {
+      $mean = $sum / $n
+      $sd = [math]::Sqrt([math]::Max(0.0, ($sum2 / $n) - ($mean * $mean)))
+      $result.colors = $colors.Count
+      $result.blank = (($colors.Count -le 3) -and ($sd -lt 6.0))
+    }
+  } catch { }
 
   if ($prev -and (Test-Path $prev) -and (-not $region)) {
     try {
@@ -837,80 +896,135 @@ function Resolve-XiaomiExecutable([string]$launchPath) {
   return $null
 }
 
+# 画面是不是"空壳"：纯色/近纯色说明投屏还没真正开始，不能当成可用画面报成功。
+function Get-SurfaceStats($target) {
+  $tmp = Join-Path ([IO.Path]::GetTempPath()) ('mi-surface-' + [guid]::NewGuid().ToString('N') + '.png')
+  try {
+    $null = Invoke-Capture $target $tmp $null $null 0
+    if (-not (Test-Path -LiteralPath $tmp)) { return $null }
+    $bmp = [System.Drawing.Bitmap]::FromFile($tmp)
+    try {
+      $stepX = [math]::Max(1, [int]($bmp.Width / 48))
+      $stepY = [math]::Max(1, [int]($bmp.Height / 48))
+      $colors = New-Object 'System.Collections.Generic.HashSet[string]'
+      $sum = 0.0; $sum2 = 0.0; $n = 0
+      for ($y = 0; $y -lt $bmp.Height; $y += $stepY) {
+        for ($x = 0; $x -lt $bmp.Width; $x += $stepX) {
+          $c = $bmp.GetPixel($x, $y)
+          $v = ($c.R + $c.G + $c.B) / 3.0
+          $sum += $v; $sum2 += $v * $v; $n++
+          [void]$colors.Add("$([int]($c.R / 16)):$([int]($c.G / 16)):$([int]($c.B / 16))")
+        }
+      }
+      if ($n -eq 0) { return $null }
+      $mean = $sum / $n
+      $sd = [math]::Sqrt([math]::Max(0.0, ($sum2 / $n) - ($mean * $mean)))
+      return @{
+        colors  = $colors.Count
+        mean    = [math]::Round($mean, 1)
+        stdev   = [math]::Round($sd, 2)
+        blank   = (($colors.Count -le 3) -and ($sd -lt 6.0))
+      }
+    } finally { $bmp.Dispose() }
+  } catch {
+    return $null
+  } finally {
+    try { if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force } } catch { }
+  }
+}
+
+# 全后台唤醒：只用窗口 API（不点任务栏/托盘、不 SendInput、不动鼠标、不激活窗口）。
 function Invoke-Wake($spec, $req) {
   $timeoutMs = 15000
   if ($null -ne $req.timeoutMs) { $timeoutMs = [int]$req.timeoutMs }
   $timeoutMs = [int][math]::Max(3000, [math]::Min(60000, $timeoutMs))
   $launchPath = [string]$req.launchPath
-  $parent = [MiPhone.Native]::FindParent($spec.Titles, $spec.ParentClass)
   $started = $false
-  $clientRunning = $false
   $restored = $false
   $launchError = $null
 
-  if ($parent -eq [IntPtr]::Zero) {
-    # 客户端已有进程时不要重复启动；它可能仍在连接/创建投屏窗口。
-    try {
-      $existing = Get-Process -Name 'XiaomiPcManager' -ErrorAction SilentlyContinue | Select-Object -First 1
-      $clientRunning = $null -ne $existing
-    } catch { $clientRunning = $false }
-    if (-not $clientRunning) {
-      $exe = Resolve-XiaomiExecutable $launchPath
-    }
-    if (-not $clientRunning -and -not $exe) {
+  # 客户端进程在不在，和手机画面有没有投出来是两件事：先确保客户端在跑（最小化启动，不抢前台）。
+  $clientRunning = $false
+  try {
+    $existing = Get-Process -Name 'XiaomiPcManager' -ErrorAction SilentlyContinue | Select-Object -First 1
+    $clientRunning = $null -ne $existing
+  } catch { $clientRunning = $false }
+  if (-not $clientRunning) {
+    $exe = Resolve-XiaomiExecutable $launchPath
+    if (-not $exe) {
       return @{
-        ok = $false; action = 'wake'; state = 'client-not-found'
+        ok = $false; action = 'wake'; state = 'client-not-found'; deviceState = 'unknown'
         unlockRequired = $false
-        error = '找不到小米互联客户端。请先安装/启动 XiaomiPcManager，或在 wake 请求中提供 launchPath。'
+        userActionRequired = '电脑上没找到小米互联客户端。请安装并登录小米电脑管家，或手动打开一次「跨屏协作」。'
+        error = '找不到小米互联客户端。'
       }
     }
-    if (-not $clientRunning) {
-      try {
-        # 最小化启动，避免唤起时抢占用户当前窗口；不模拟点击、不修改手机状态。
-        Start-Process -FilePath $exe -WindowStyle Minimized | Out-Null
-        $started = $true
-      } catch {
-        $launchError = $_.Exception.Message
-      }
-    }
+    try {
+      Start-Process -FilePath $exe -WindowStyle Minimized | Out-Null
+      $started = $true
+    } catch { $launchError = $_.Exception.Message }
   }
 
+  # 关键：投屏窗口可能被藏到屏幕外(-21333,-21333)或处于最小化，必须连隐藏窗口一起找。
+  $parent = [IntPtr]::Zero
   $deadline = (Get-Date).AddMilliseconds($timeoutMs)
+  $blankOnce = $false
   while ((Get-Date) -lt $deadline) {
-    if ($parent -eq [IntPtr]::Zero) { $parent = [MiPhone.Native]::FindParent($spec.Titles, $spec.ParentClass) }
+    if ($parent -eq [IntPtr]::Zero -or -not [MiPhone.Native]::IsWindow($parent)) {
+      $parent = [MiPhone.Native]::FindParent($spec.Titles, $spec.ParentClass, $true)
+    }
     if ($parent -ne [IntPtr]::Zero) {
-      if ([MiPhone.Native]::IsIconic($parent)) {
-        [void][MiPhone.Native]::ShowWindow($parent, 4) # SW_SHOWNOACTIVATE：恢复但不抢前台
-        $restored = $true
-      }
+      if ([MiPhone.Native]::RestoreNoActivate($parent)) { $restored = $true; Start-Sleep -Milliseconds 250 }
       $child = [MiPhone.Native]::FindChild($parent, $spec.ChildClass)
       if ($child -eq [IntPtr]::Zero) { $child = [MiPhone.Native]::FindChild($parent, '') }
+      if ($child -eq [IntPtr]::Zero) {
+        $self = Get-ClientInfo $parent
+        if ($self.W -ge 100 -and $self.H -ge 100) { $child = $parent }
+      }
       if ($child -ne [IntPtr]::Zero) {
         $target = @{ Parent = $parent; Child = $child }
-        $info = Get-WindowInfo $target
-        $info.action = 'wake'
-        $info.state = if ($started) { 'started' } elseif ($restored) { 'restored' } else { 'ready' }
-        $info.surface = 'available'
-        $info.started = $started
-        $info.restored = $restored
-        # 只能确认 Windows 端画面存在，不能从窗口存在性推断手机已解锁。
-        $info.unlockRequired = $true
-        $info.unlockState = 'unknown'
-        $info.userPrompt = '小米互联画面已唤起。请主人在手机上手动完成指纹解锁；解锁完成前不要继续操作。插件不会代为解锁。'
-        return $info
+        $stats = Get-SurfaceStats $target
+        if ($null -ne $stats -and -not $stats.blank) {
+          $info = Get-WindowInfo $target
+          $info.action = 'wake'
+          $info.state = if ($started) { 'started' } elseif ($restored) { 'restored' } else { 'ready' }
+          $info.surface = 'ready'
+          $info.started = $started
+          $info.restored = $restored
+          # 画面有内容只说明投屏在传，不能从窗口推断手机已解锁。
+          $info.unlockRequired = $true
+          $info.unlockState = 'unknown'
+          $info.userPrompt = '小米互联画面已就绪。请主人在手机上手动完成指纹解锁；解锁完成前不要继续操作。插件不会代为解锁。'
+          return $info
+        }
+        $blankOnce = $true
       }
     }
     Start-Sleep -Milliseconds 500
   }
 
   if ($launchError) {
-    return @{ ok = $false; action = 'wake'; state = 'launch-failed'; started = $false; unlockRequired = $false; error = "启动小米互联失败：$launchError" }
+    return @{
+      ok = $false; action = 'wake'; state = 'launch-failed'; started = $false
+      unlockRequired = $false; error = "启动小米互联失败：$launchError"
+    }
+  }
+  if ($blankOnce) {
+    # 窗口在，但画面是空的：投屏通道没起来，通常是手机没在同一局域网/没连上。
+    return @{
+      ok = $false; action = 'wake'; state = 'screen-not-projected'; deviceState = 'not-connected'
+      started = $started; restored = $restored
+      unlockRequired = $false
+      userActionRequired = '找到了小米互联窗口但没有真实的手机画面（空白）。请确认手机和电脑连同一个局域网、手机端小米互联已开启并允许投屏；连上后再让我唤醒。此时还不需要指纹解锁。'
+      error = '小米互联窗口存在，但画面为空，投屏尚未建立。'
+    }
   }
   return @{
-    ok = $false; action = 'wake'; state = 'awaiting-phone-screen'; started = $started; restored = $restored
+    ok = $false; action = 'wake'; state = 'phone-not-found'; deviceState = 'not-connected'
+    started = $started; restored = $restored
     unlockRequired = $false
-    userActionRequired = '请确认小米互联已投出手机画面；画面出现后再由主人手动完成指纹解锁。插件不会点击锁屏或授权按钮。'
-    error = '小米互联客户端已唤起，但等待手机画面子窗口超时。'
+    userActionRequired = '没发现手机画面窗口，通常表示手机不在身边或不在同一局域网。请让手机和电脑连同一局域网、开启小米互联后重试。'
+    error = '没有找到手机画面窗口（设备可能不在附近或不在同一局域网）。'
   }
 }
 
@@ -932,14 +1046,12 @@ try {
     switch ($action) {
     'info' { $result = Get-WindowInfo $target }
     'restore' {
-      $parent = $target.Parent
-      $wasIconic = [MiPhone.Native]::IsIconic($parent)
-      if ($wasIconic) {
-        [void][MiPhone.Native]::ShowWindow($parent, 9)   # SW_RESTORE
-        Start-Sleep -Milliseconds 300
-      }
+      # 同样走全后台恢复：不激活窗口、不抢焦点、不动鼠标。
+      $wasIconic = [MiPhone.Native]::IsIconic($target.Parent)
+      $moved = [MiPhone.Native]::RestoreNoActivate($target.Parent)
+      if ($moved) { Start-Sleep -Milliseconds 250 }
       $info = Get-WindowInfo $target
-      $info.restored = $wasIconic
+      $info.restored = ($wasIconic -or $moved)
       $result = $info
     }
     'capture' {

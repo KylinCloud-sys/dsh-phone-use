@@ -149,7 +149,7 @@ function normalizeSteps(steps) {
 const TOOLS = [
   {
     name: 'phone_wake',
-    description: '后台唤起/恢复小米互联并等待手机画面子窗口。成功后一定返回 unlockRequired=true：必须让主人在手机上手动指纹解锁，得到明确确认前不要继续操控；插件不点击锁屏、授权或配对按钮。',
+    description: '全后台唤起/恢复小米互联并等待真实手机画面（不点任务栏、不发 SendInput、不动鼠标、不抢焦点）。按 state 区分：ready/restored/started 时返回 unlockRequired=true，必须让主人在手机上手动指纹解锁并等确认；screen-not-projected 表示窗口在但画面空白，多半不在同一局域网，此时不需要解锁；phone-not-found 表示设备不在附近或不在同一局域网。插件绝不点击锁屏、授权或配对按钮。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -203,12 +203,19 @@ const TOOLS = [
       const r = await run(req, 40000)
       if (r.ok === false) return { text: { ok: false, error: r.error } }
       const img = r.img || {}
+      const blank = img.blank === true
       const unchanged = img.changed === false && !args.region
       const payload = { ok: true, s: [r.screen.w, r.screen.h], ch: img.changed !== false }
       if (img.changed !== false && img.box) payload.box = img.box
-      if (unchanged) payload.note = '画面未变化'
+      if (blank) {
+        payload.blank = true
+        payload.state = 'screen-not-projected'
+        payload.note = '画面是空白：投屏通道没建立（手机可能不在同一局域网/未开启互联），此时不需要指纹解锁。'
+      } else if (unchanged) {
+        payload.note = '画面未变化'
+      }
       const file = args.image === 'full' ? FRAME : img.cropPath || FRAME
-      const wantImage = args.image !== 'none' && !unchanged
+      const wantImage = args.image !== 'none' && !unchanged && !blank
       return { text: payload, image: wantImage ? file : null }
     },
   },
