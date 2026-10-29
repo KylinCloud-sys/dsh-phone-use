@@ -106,6 +106,44 @@ $withOcr = Get-SurfaceStats $target -Ocr   # ← Ocr 恒为 False，OCR 从未�
 | 连接中 | 满 10 秒 | 每套 continue，走满 5 套判失败 |
 
 OCR 约 1.3 秒，只在前两条都成立时才跑，真实画面完全跳过。
+## D0b 启动顺序改为「先妙享桌面、再跨屏协作」（2026-10-29）
+
+### 推翻旧结论
+
+旧代码只启动 `MiSmartShareHandoff`（妙享桌面），指望它自己拉起 `MiScreenShare`（跨屏协作），并在注释里写死「绝不能同时启动 MiScreenShare.exe」。
+
+**这个结论是错的。** 实测证明：真正的前提是**妙享桌面必须在运行**。只要它在（通常一直最小化在任务栏），再启动跨屏协作就能完整握手、画面正常渲染。
+
+### 实测对照
+
+| 场景 | 结果 |
+|---|---|
+| 妙享桌面在（最小化）+ 启动跨屏协作 | ✅ 0.86 秒拿到真实画面（dominant=0.683、colors=220） |
+| 妙享桌面被杀 + 孤立启动跨屏协作 | ❌ 画面能渲染但永远停在「正在连接」，10 秒后判失败 |
+
+孤立启动时画面并非黑屏（dominant=0.977、animating=true），只是握手不完整——**这种"看起来有画面但连不上"最容易被误判成正常**。
+
+### 新逻辑
+
+```
+1) 管家在跑（不在则启动）
+2a) 妙享桌面：不存在才启动，存在就沿用（绝不杀、绝不重复启动）
+    └ 启动后等 1500ms 让它挂到任务栏
+2b) 跨屏协作：不存在才启动
+    └ 两者都以管家为父进程（PROC_THREAD_ATTRIBUTE_PARENT_PROCESS）
+```
+
+### 血泪教训：不要按进程名批量清理
+
+排查时用了这行：
+
+```powershell
+Get-Process -Name 'MiSmartShareHandoff','MiScreenShare' | Stop-Process -Force
+```
+
+**把主人一直最小化在任务栏的妙享桌面一起杀了。** 它被 kill 后无法用 `Start-Process` 简单拉起（3 秒就自己退出），只能由主人手动恢复。
+
+**规则：清理只针对 `MiScreenShare`，绝不碰 `MiSmartShareHandoff`。** 它是常驻程序，不是一次性的启动器。
 ## D1 架构与文件职责
 
 - `scripts/phone.ps1` — 唯一真正干活的地方：唤起/恢复 XiaomiPcManager，定位「跨屏协作」窗口 → 找画面子窗口 `kMiChildSharedWindow` → 截图 / 点击 / 滑动 / 长按 / 键盘 / 剪贴板。所有参数走 JSON 请求文件，结果写 JSON 结果文件（避免中文控制台编码问题）。
@@ -290,7 +328,7 @@ OCR 约 1.3 秒，只在前两条都成立时才跑，真实画面完全跳过�
 
 1. **必须由管家派生 Handoff**。用 PowerShell 直接 `Start-Process` 启动的 Handoff 是孤儿进程（ppid=shell），窗口能弹出来但内容渲染不出来、点也没反应。要用 `PROC_THREAD_ATTRIBUTE_PARENT_PROCESS` 以管家为父进程启动。
 2. **点击前必须先 `WM_ACTIVATE`**。这个自绘窗口只收 `WM_LBUTTONDOWN/UP` 完全没反应（实测 PostMessage 和 SendMessage 都试过）；补一条 `WM_ACTIVATE(WA_ACTIVE)` 后再点就能拉起跨屏协作。`WM_ACTIVATE` 只是投递窗口消息，不会把窗口提到前台、不动鼠标。
-3. **不能同时启动 MiScreenShare.exe**。那样会多弹一个独立窗口、破坏握手，表现为加载页长时间不结束、最后报「无法连接」。
+3. ~~不能同时启动 MiScreenShare.exe~~ **（2026-10-29 已被实测推翻，见 D0b）**。当时的结论是「同时启动会破坏握手」，实际原因是**妙享桌面不在**时孤立启动跨屏协作才连不上。正确做法是**先妙享桌面、再跨屏协作**。
 
 **占位页判据补一条**：窗口刚创建未渲染时是黑屏（实测 dominant=0.74、74% 为黑），既不是纯白占位页也不是真实画面，此前会被误判成 `ready`。现在「整屏过暗」也计入占位页。
 

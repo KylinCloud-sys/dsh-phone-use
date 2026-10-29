@@ -1,4 +1,4 @@
-// 技能正文（index.js 与 mcp/dsh-plugin.mjs 共用）
+﻿// 技能正文（index.js 与 mcp/dsh-plugin.mjs 共用）
 export const SKILL_CONTENT = `# 小米互联手机操控（dsh-phone-use）
 
 > 工具名可能是 phone_info 或 mcp__phone__phone_info（取决于挂载方式），按实际可用名调用。
@@ -16,6 +16,8 @@ export const SKILL_CONTENT = `# 小米互联手机操控（dsh-phone-use）
    - 任何会覆盖用户剪贴板内容的长期占用（插件会临时写入并立即还原，这属于已授权的默认行为）。
 5. **失败即停**。后台点击连续两次"该有变化却没变化"→ 停下来报告，说清已做/未做/卡在哪，**不许自动转前台、不许盲目重试**。
 6. 开始任何手机操作前先调用 \`phone_wake\`。它会后台启动/恢复小米互联并等待画面；成功或超时都要先处理返回里的 \`unlockRequired\` / \`userPrompt\`。**只要 \`unlockRequired=true\`，必须明确提醒主人在手机上手动完成指纹解锁，并等待主人确认“已解锁”后才能调用 \`phone_see\`/\`phone_do\`；绝不代点锁屏、授权或配对按钮。**窗口被最小化可由 \`phone_wake\` 恢复；窗口被关掉且客户端无法启动或手机断开，则报告错误并停止。
+
+   > **不要手动清理小米互联进程。** 「妙享桌面」(\`MiSmartShareHandoff\`) 是常驻程序，通常一直最小化在任务栏——它被 kill 后无法用普通方式拉起，只能让主人手动恢复，而缺了它投屏永远连不上。确实需要重置时，**只针对「跨屏协作」(\`MiScreenShare\`)**，绝不碰妙享桌面。
 
 ## 坐标
 

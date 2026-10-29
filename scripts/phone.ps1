@@ -1234,35 +1234,57 @@ function Invoke-Wake($spec, $req) {
     } catch { $launchError = $_.Exception.Message }
   }
 
-  # 2) 正确唤起方式（主人实测）：只启动「妙享桌面」(MiSmartShareHandoff)，
-  #    它会自己拉起「跨屏协作」(MiScreenShare)，随后妙享桌面自行关闭，最终只剩一个窗口。
-  #    ⚠ 绝不能同时启动 MiScreenShare.exe：那样会多弹一个独立窗口，破坏握手，
-  #    表现为加载页长时间不结束、最后报「无法连接」。
-  $castRunning = $null -ne (Get-Process -Name 'MiSmartShareHandoff' -ErrorAction SilentlyContinue | Select-Object -First 1)
-  if (-not $castRunning) {
+  # 2) 唤起顺序（主人实测有效）：先确保「妙享桌面」(MiSmartShareHandoff) 在运行，
+  #    再启动「跨屏协作」(MiScreenShare)，投屏握手才完整、画面才渲染得出来。
+  #    ⚠ 妙享桌面是常驻程序，通常一直最小化在任务栏 —— 绝不能杀掉它，也不要重复启动它。
+  #    缺了它、只孤立启动 MiScreenShare，画面会一直停在「正在连接」，最后报失败。
+  $mgrPid = 0
+  try {
+    $m = Get-Process -Name 'XiaomiPcManager' -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($m) { $mgrPid = [int]$m.Id }
+  } catch { }
+
+  # 2a) 先妙享桌面：不存在才启动（存在就沿用，不动它）
+  $handoffRunning = $null -ne (Get-Process -Name 'MiSmartShareHandoff' -ErrorAction SilentlyContinue | Select-Object -First 1)
+  if (-not $handoffRunning) {
     $hoExe = Resolve-ScreenShareExecutable 'MiSmartShareHandoff.exe'
     if ($hoExe) {
-      # 不需要设备 ID / 设备名：只要以管家为父进程拉起 Handoff，管家会自己找到已连接的设备。
       $hoArgs = @("--CastBusinessType=`"1`"")
       try {
-        $mgrPid = 0
-        try {
-          $m = Get-Process -Name 'XiaomiPcManager' -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($m) { $mgrPid = [int]$m.Id }
-        } catch { }
         $cmdLine = '"' + $hoExe + '" ' + ($hoArgs -join ' ')
         $spawnResult = $null
         if ($mgrPid -gt 0) {
           # 以管家为父进程启动：子进程能继承管家的管道/句柄，投屏握手才成立。
-          # 直接由 PowerShell 启动会变成孤儿进程，窗口虽在但内容渲染不出来、点也没反应。
           try { $spawnResult = Start-ProcessWithParent $mgrPid $hoExe $cmdLine } catch { $spawnResult = $null }
         }
         if (-not ($spawnResult -like 'OK|*')) {
-          # 回退：普通启动（可能不完整，但至少给主人一个窗口去点）
+          # 回退：普通启动
           Start-Process -FilePath $hoExe -ArgumentList $hoArgs -WindowStyle Minimized | Out-Null
         }
         $started = $true
-      } catch { $launchError = $_.Exception.Message }    }
+        # 给它一点时间把自己挂到任务栏，再继续拉跨屏协作
+        Start-Sleep -Milliseconds 1500
+      } catch { $launchError = $_.Exception.Message }
+    }
+  }
+
+  # 2b) 再跨屏协作：妙享桌面就绪后启动它，握手才完整。
+  $castRunning = $null -ne (Get-Process -Name 'MiScreenShare' -ErrorAction SilentlyContinue | Select-Object -First 1)
+  if (-not $castRunning) {
+    $ssExe = Resolve-ScreenShareExecutable 'MiScreenShare.exe'
+    if ($ssExe) {
+      try {
+        $ssCmd = '"' + $ssExe + '"'
+        $ssResult = $null
+        if ($mgrPid -gt 0) {
+          try { $ssResult = Start-ProcessWithParent $mgrPid $ssExe $ssCmd } catch { $ssResult = $null }
+        }
+        if (-not ($ssResult -like 'OK|*')) {
+          Start-Process -FilePath $ssExe -WindowStyle Minimized | Out-Null
+        }
+        $started = $true
+      } catch { $launchError = $_.Exception.Message }
+    }
   }
 
   $deadline = (Get-Date).AddMilliseconds($timeoutMs)
