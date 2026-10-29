@@ -1,6 +1,6 @@
 {
   "name": "dsh-mi-phone-use",
-  "version": "0.3.7",
+  "version": "0.3.8",
   "private": true,
   "description": "DeepSeek Harness 插件：小米互联（跨屏协作）后台唤起、截图、百分比坐标点击、批量动作与中英文输入。不依赖 adb。",
   "type": "module",

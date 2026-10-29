@@ -506,6 +506,9 @@ function Invoke-Capture($target, [string]$out, [string]$prev, $region, [int]$max
     $colorCount = New-Object 'System.Collections.Generic.Dictionary[string,int]'
     $sum = 0.0; $sum2 = 0.0; $n = 0; $darkCount = 0; $blueCount = 0
     $blueMinX = [int]::MaxValue; $blueMinY = [int]::MaxValue; $blueMaxX = -1; $blueMaxY = -1
+    $textMinX = [int]::MaxValue; $textMinY = [int]::MaxValue; $textMaxX = -1; $textMaxY = -1
+    $innerX0 = [int]($crop.Width * 0.05); $innerX1 = [int]($crop.Width * 0.95)
+    $innerY0 = [int]($crop.Height * 0.05); $innerY1 = [int]($crop.Height * 0.95)
     for ($sy = 0; $sy -lt $crop.Height; $sy += $stepY) {
       for ($sx = 0; $sx -lt $crop.Width; $sx += $stepX) {
         $c = $crop.GetPixel($sx, $sy)
@@ -515,6 +518,14 @@ function Invoke-Capture($target, [string]$out, [string]$prev, $region, [int]$max
         [void]$colors.Add($key)
         if ($colorCount.ContainsKey($key)) { $colorCount[$key]++ } else { $colorCount[$key] = 1 }
         if ($c.R -lt 60 -and $c.G -lt 60 -and $c.B -lt 60) { $darkCount++ }
+        # 内部暗色包围盒（排除四周 5% 边框）：用于识别「正在连接...」这类单行文字。
+        if ($c.R -lt 100 -and $c.G -lt 100 -and $c.B -lt 100 -and
+            $sx -gt $innerX0 -and $sx -lt $innerX1 -and $sy -gt $innerY0 -and $sy -lt $innerY1) {
+          if ($sx -lt $textMinX) { $textMinX = $sx }
+          if ($sx -gt $textMaxX) { $textMaxX = $sx }
+          if ($sy -lt $textMinY) { $textMinY = $sy }
+          if ($sy -gt $textMaxY) { $textMaxY = $sy }
+        }
         if ($c.B -gt 150 -and ($c.B - $c.R) -gt 80) {
           $blueCount++
           if ($sx -lt $blueMinX) { $blueMinX = $sx }
@@ -554,6 +565,32 @@ function Invoke-Capture($target, [string]$out, [string]$prev, $region, [int]$max
       $result.unlockPage = ($result.blank -and $blueWide -ge 0.30 -and $blueTall -ge 0.15 -and ($darkCount / [double]$n) -gt 0.001)
       # 加载失败页：有蓝字但没有大插图
       $result.errorPage = $result.blank -and (-not $result.unlockPage)
+
+      # 「正在连接...」文字特征（主人实测）：纯色底 + 居中单行文字，包围盒约 22% 宽 / 2% 高、宽高比约 5。
+      # 配合"画面在动"三点同时成立，才能判为连接页，避免把纯色视频画面误判。
+      $textWide = 0.0; $textTall = 0.0; $textRatio = 0.0; $textCentered = $false
+      if ($textMaxX -ge $textMinX -and $textMaxY -ge $textMinY) {
+        $tw = $textMaxX - $textMinX + 1
+        $th = $textMaxY - $textMinY + 1
+        $textWide = $tw / [double]$crop.Width
+        $textTall = $th / [double]$crop.Height
+        if ($th -gt 0) { $textRatio = $tw / [double]$th }
+        $cx = ($textMinX + $textMaxX) / 2.0
+        $cy = ($textMinY + $textMaxY) / 2.0
+        # 文字中心落在画面中部区域（水平 30%~70%、垂直 35%~65%）
+        $textCentered = ($cx -gt $crop.Width * 0.30 -and $cx -lt $crop.Width * 0.70 -and
+                         $cy -gt $crop.Height * 0.35 -and $cy -lt $crop.Height * 0.65)
+      }
+      $result.textWide = [math]::Round($textWide, 3)
+      $result.textTall = [math]::Round($textTall, 3)
+      $result.textRatio = [math]::Round($textRatio, 2)
+      $result.textCentered = $textCentered
+      # 单行居中文字：宽度 15%~35%、高度 1%~5%、宽高比 3~9、居中
+      $result.connectingText = ($textCentered -and $textWide -ge 0.15 -and $textWide -le 0.35 -and
+                                $textTall -ge 0.01 -and $textTall -le 0.05 -and
+                                $textRatio -ge 3 -and $textRatio -le 9)
+
+
     }
   } catch { }
 
@@ -581,6 +618,19 @@ function Invoke-Capture($target, [string]$out, [string]$prev, $region, [int]$max
     if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
     $crop.Save($out, [System.Drawing.Imaging.ImageFormat]::Png)
     $result.path = $out
+
+    # OCR 是最可靠的判据：直接读画面上的文字。
+    # 只认三个已知占位页的关键词；真实画面（桌面/视频/App）不会命中，因此不会误判。
+    $ocr = Get-SurfaceOcrText $out
+    if ($ocr) {
+      $result.ocr = $ocr
+      $result.ocrConnecting = ($ocr -match '正在连接')
+      $result.ocrUnlock     = ($ocr -match '手机解锁' -or $ocr -match '请在手机端解锁')
+      $result.ocrFailed     = ($ocr -match '加载失败' -or $ocr -match '小米社区反馈')
+      if ($result.ocrUnlock) { $result.unlockPage = $true; $result.blank = $true }
+      if ($result.ocrFailed) { $result.unlockPage = $false; $result.errorPage = $true; $result.blank = $true }
+      if ($result.ocrConnecting) { $result.connectingPage = $true; $result.blank = $true }
+    }
 
     # 变化区域够小就额外产一张裁图：调一次拿两样，省 token
     if ($result.box -and -not $region) {
@@ -939,6 +989,50 @@ function Resolve-XiaomiExecutable([string]$launchPath) {
   return $null
 }
 
+# 用 Windows 内置 OCR（zh-Hans）读画面文字。
+# 主人实测：投屏画面里的「正在连接...」「手机解锁」「加载失败」字体够大，识别准确；
+# 之前判定 OCR 无效是因为当时字体只有 16px 且画面模糊。
+# 真实手机画面（桌面/视频/App）OCR 出来是噪声或普通内容，不会命中这些关键词。
+function Get-SurfaceOcrText([string]$imagePath) {
+  if (-not $imagePath -or -not (Test-Path -LiteralPath $imagePath)) { return $null }
+  try {
+    if (-not $script:OcrReady) {
+      Add-Type -AssemblyName System.Runtime.WindowsRuntime -ErrorAction Stop
+      $asTask = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
+        $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and
+        $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1'
+      })[0]
+      $script:OcrAsTask = $asTask
+      $null = [Windows.Storage.StorageFile, Windows.Storage, ContentType=WindowsRuntime]
+      $null = [Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType=WindowsRuntime]
+      $null = [Windows.Graphics.Imaging.BitmapDecoder, Windows.Foundation, ContentType=WindowsRuntime]
+      $null = [Windows.Globalization.Language, Windows.Foundation, ContentType=WindowsRuntime]
+      $lang = New-Object Windows.Globalization.Language 'zh-Hans-CN'
+      $script:OcrEngine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromLanguage($lang)
+      if (-not $script:OcrEngine) { $script:OcrReady = $false; return $null }
+      $script:OcrReady = $true
+    }
+    if (-not $script:OcrEngine) { return $null }
+
+    $await = {
+      param($op, $type)
+      $t = $script:OcrAsTask.MakeGenericMethod($type).Invoke($null, @($op))
+      $t.Wait(-1) | Out-Null
+      $t.Result
+    }
+    $file = & $await ([Windows.Storage.StorageFile]::GetFileFromPathAsync($imagePath)) ([Windows.Storage.StorageFile])
+    $stream = & $await ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])
+    try {
+      $decoder = & $await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
+      $bitmap = & $await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
+      $result = & $await ($script:OcrEngine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
+      # 去掉所有空白，中文常被识别成「正 在 连 接」
+      return (($result.Text -replace '\s+',''))
+    } finally { $stream.Dispose() }
+  } catch {
+    return $null
+  }
+}
 # 判定"这是不是真实手机画面"：不看尺寸（横竖屏会互换、缩放会改分辨率），
 # 只看宽高比是否像一块手机屏，以及画面是否有内容。
 function Test-PhoneAspect([int]$w, [int]$h) {
@@ -1003,6 +1097,9 @@ function Get-SurfaceStats($target) {
       $colorCount = New-Object 'System.Collections.Generic.Dictionary[string,int]'
       $sum = 0.0; $sum2 = 0.0; $n = 0; $darkCount = 0; $blueCount = 0
     $blueMinX = [int]::MaxValue; $blueMinY = [int]::MaxValue; $blueMaxX = -1; $blueMaxY = -1
+    $textMinX = [int]::MaxValue; $textMinY = [int]::MaxValue; $textMaxX = -1; $textMaxY = -1
+    $innerX0 = [int]($crop.Width * 0.05); $innerX1 = [int]($crop.Width * 0.95)
+    $innerY0 = [int]($crop.Height * 0.05); $innerY1 = [int]($crop.Height * 0.95)
       for ($y = 0; $y -lt $bmp.Height; $y += $stepY) {
         for ($x = 0; $x -lt $bmp.Width; $x += $stepX) {
           $c = $bmp.GetPixel($x, $y)
@@ -1277,7 +1374,13 @@ function Invoke-Wake($spec, $req) {
             Start-Sleep -Milliseconds 500
           }
           # 「手机解锁」提示页 = 投屏已连上、只差主人解锁，属于成功唤起。
+          # 优先用 OCR 判定（最可靠）；OCR 不可用时回退到几何判据。
           $isUnlockPage = ($null -ne $stats -and $stats.unlockPage -eq $true)
+          $isConnectingPage = ($null -ne $stats -and $stats.connectingPage -eq $true)
+          if ($isConnectingPage) {
+            # 连接页：还在建立投屏，不是失败也不是就绪。继续等，让外层循环处理。
+            $stats = $stats
+          }
           if ($isUnlockPage) {
             $info = Get-WindowInfo $target
             $info.action = 'wake'
@@ -1330,11 +1433,23 @@ function Invoke-Wake($spec, $req) {
     # 2) 画面是否在动 —— 连接中有跳动圆点；注意桌面静止时也不动，故只作兜底
     $motion = $null
     if ($lastTarget) { $motion = Test-SurfaceAnimating $lastTarget 3 900 }
-    # 连接页有跳动圆点（画面持续变化）；失败页是静态错误页（完全静止）。
-    # 主人实测确认：这是区分两者的可靠依据，颜色/包围盒都不可靠（圆点也是蓝色系）。
+    # 判据优先级：OCR 文字 > 动画 > 颜色。
+    # OCR 最可靠：能直接读到「正在连接」「加载失败」「手机解锁」，真实画面不会命中。
+    $ocrConnecting = ($null -ne $lastStats -and $lastStats.ocrConnecting -eq $true)
+    $ocrFailed     = ($null -ne $lastStats -and $lastStats.ocrFailed -eq $true)
     $animating = ($null -ne $motion -and $motion.animating -eq $true)
-    $isErrorPage = ($null -ne $lastStats -and $lastStats.errorPage -eq $true) -and (-not $animating)
-    $connecting = $animating -and (-not $isErrorPage)
+    if ($ocrFailed) {
+      $connecting = $false
+      $isErrorPage = $true
+    } elseif ($ocrConnecting) {
+      # 明确读到「正在连接」→ 一定还在连，即使画面暂时静止也算连接中
+      $connecting = $true
+      $isErrorPage = $false
+    } else {
+      # 没有 OCR 结论时回退：在动 = 连接中，静止 = 失败
+      $isErrorPage = ($null -ne $lastStats -and $lastStats.errorPage -eq $true) -and (-not $animating)
+      $connecting = $animating -and (-not $isErrorPage)
+    }
     return @{
       ok = $false; action = 'wake'
       state = if ($connecting) { 'connecting' } else { 'connect-failed' }
