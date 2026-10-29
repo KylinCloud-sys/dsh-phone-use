@@ -1,4 +1,4 @@
-# 开发日志 · dsh-mi-phone-use
+# 开发日志 · dsh-phone-use
 
 > 这份文件只给维护者看。使用者请读 [README.md](README.md)。
 > **用法：先看第 1 层目录和长期规则，只有需要时再跳到第 2 层对应小节，不要整篇通读。**
@@ -35,7 +35,7 @@
 - **R3 不许猜菜单项位置。** 每个 App、每个页面的粘贴菜单项数/顺序/宽度都不同，必须先长按、截图、看清「粘贴」在哪，再点。
 - **R4 不许逐项点击试探。** 点错会触发「AI写作」「常用语」「全选」这类功能，副作用不可控。
 - **R5 以画面为验收标准。** 返回 `ok:true` 不代表字进去了，必须看 `inserted` 或截图确认。
-- **R6 改动生效范围不同。** `mi-phone.ps1` 每次调用都新起 PowerShell，改完立即生效；`mcp/server.mjs` 是常驻进程，**必须重启 DSH / 新开会话**才生效。
+- **R6 改动生效范围不同。** `phone.ps1` 每次调用都新起 PowerShell，改完立即生效；`mcp/server.mjs` 是常驻进程，**必须重启 DSH / 新开会话**才生效。
 - **R7 测试只在无副作用位置。** 用微信搜索框之类的地方验证输入，绝不往聊天框发消息、绝不点「发送」。
 - **R8 剪贴板用完要还原。** 写完立即用 `{"clip":"@restore"}` 放回原内容。
 - **R9 授权弹窗不自己点。** 系统权限、登录、支付类弹窗只报告位置，等用户决定。
@@ -46,7 +46,7 @@
 
 ## D1 架构与文件职责
 
-- `scripts/mi-phone.ps1` — 唯一真正干活的地方：唤起/恢复 XiaomiPcManager，定位「跨屏协作」窗口 → 找画面子窗口 `kMiChildSharedWindow` → 截图 / 点击 / 滑动 / 长按 / 键盘 / 剪贴板。所有参数走 JSON 请求文件，结果写 JSON 结果文件（避免中文控制台编码问题）。
+- `scripts/phone.ps1` — 唯一真正干活的地方：唤起/恢复 XiaomiPcManager，定位「跨屏协作」窗口 → 找画面子窗口 `kMiChildSharedWindow` → 截图 / 点击 / 滑动 / 长按 / 键盘 / 剪贴板。所有参数走 JSON 请求文件，结果写 JSON 结果文件（避免中文控制台编码问题）。
 - `mcp/server.mjs` — MCP stdio 服务，把 `phone_wake / phone_info / phone_see / phone_do` 四个工具暴露给 DSH，负责参数校验、三档权限闸门、帧文件复用。
 - `index.js` — DSH 插件入口，注册 `mi-phone` 技能 + 挂载上面的 MCP server。
 - `cli.mjs` — 不依赖工具投影的命令行入口，调试用。
@@ -128,7 +128,7 @@
 
 ## D9 剪贴板备份与还原
 
-- 写入新内容前，若还没有备份文件，先把当前剪贴板存到 `%TEMP%\dsh-mi-phone-use\clip-backup.txt`。
+- 写入新内容前，若还没有备份文件，先把当前剪贴板存到 `%TEMP%\dsh-phone-use\clip-backup.txt`。
 - `{"clip":"@restore"}` → 读回备份、写回剪贴板、删备份。
 - 备份只在“没有备份”时创建，避免把中间态当原件。
 
@@ -143,7 +143,7 @@
 
 ## D11 待办与已知缺口
 
-- `server.mjs` 的 `openmenu` 参数需要**重启 DSH** 才会在会话里出现；`mi-phone.ps1` 侧的 `openmenu`、`@restore`、`inserted` 即时生效。
+- `server.mjs` 的 `openmenu` 参数需要**重启 DSH** 才会在会话里出现；`phone.ps1` 侧的 `openmenu`、`@restore`、`inserted` 即时生效。
 - `phone_do` 的 `text` 中文路径在没有 `menu` 时只弹菜单、不点击，需要配套“看图再点”（刻意的，见 R3）。
 - 多设备 / 多窗口未支持。
 - 剪贴板备份只有一份，连续多次写入可能把中间态当原件（见 D9），需要时改成带时间戳的多份备份。
@@ -160,7 +160,7 @@
 | `scripts/ocr-probe.ps1` | WinRT OCR 没跑通（D7），保留会误导 |
 | `restoreclip` 动作 | 与 `clip:"@restore"` 重复，只留一条路径 |
 
-清理后行数：`mi-phone.ps1` 1230 → 约 1040 行。
+清理后行数：`phone.ps1` 1230 → 约 1040 行。
 
 ## D13 唤起与解锁规范
 

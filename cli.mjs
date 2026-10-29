@@ -17,8 +17,8 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const PKG_DIR = path.dirname(fileURLToPath(import.meta.url))
-const SCRIPT = path.join(PKG_DIR, 'scripts', 'mi-phone.ps1')
-const BASE = path.join(os.tmpdir(), 'dsh-mi-phone-use')
+const SCRIPT = path.join(PKG_DIR, 'scripts', 'phone.ps1')
+const BASE = path.join(os.tmpdir(), 'dsh-phone-use')
 const STATE_FILE = path.join(BASE, 'cli-state.json')
 const CONFIG_FILE = path.join(PKG_DIR, 'config.json')
 

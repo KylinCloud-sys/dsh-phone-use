@@ -1,8 +1,19 @@
-# dsh-mi-phone-use
+# dsh-phone-use
 
-DeepSeek Harness 插件：在**后台**操控小米手机——截图、点击、滑动、输入。不用 adb，不用 root，手机端不装任何东西。
+DeepSeek Harness 插件：在**后台**操控手机——截图、点击、滑动、输入。
 
-## 干什么用
+## 支持范围
+
+| 通道 | 状态 | 说明 |
+|---|---|---|
+| 小米互联（跨屏协作） | ✅ 已支持 | 不用 adb、不用 root、手机端不装东西 |
+| adb | 🚧 规划中 | 通用通道，可覆盖其他品牌 |
+| 其他品牌投屏 | 🚧 规划中 | 华为 / OPPO / vivo / 三星等 |
+
+当前实现只针对小米互联。代码里以 `mi` 命名的部分（`scripts/phone.ps1` 的 `MiPhone` 命名空间、小米窗口类名、`MiSmartShareHandoff` 等）**专指小米通道**，不要挪进通用层。新增 adb 或其他品牌时，应在通用调度层（`phone_wake` / `phone_see` / `phone_do` 的入口与状态判断）之外另开通道模块。
+
+**零配置**：不需要环境变量、不需要填设备 ID、不需要改任何配置文件，装好就能用。
+什么用
 
 把小米互联（跨屏协作 / 妙享桌面）的投屏窗口当成一块可操作的画布：
 
@@ -46,7 +57,7 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 
 ```powershell
 node scripts/selfcheck.mjs        # 环境自检（会真的后台点一下屏幕中心）
-powershell -File scripts/parse-check.ps1 scripts/mi-phone.ps1   # 只查 PowerShell 语法
+powershell -File scripts/parse-check.ps1 scripts/phone.ps1   # 只查 PowerShell 语法
 node scripts/mcp-test.mjs         # 只测 MCP 握手与工具清单
 ```
 

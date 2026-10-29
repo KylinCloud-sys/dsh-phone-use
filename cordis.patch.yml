@@ -1,8 +1,8 @@
-# dsh-mi-phone-use — DSH bundle patch layer
+# dsh-phone-use — DSH bundle patch layer
 #
 # 挂载小米互联（跨屏协作）手机操控插件。实际通过 MCP stdio 注册
-# phone_wake / phone_info / phone_see / phone_do，并注册技能 mi-phone。
+# phone_wake / phone_info / phone_see / phone_do，并注册技能 phone。
 # 技能负责唤醒后提醒主人手动指纹解锁；插件不代点锁屏或授权。
 - insert:
-    - id: mi-phone
-      name: 'dsh-mi-phone-use'
+    - id: phone-use
+      name: 'dsh-phone-use'

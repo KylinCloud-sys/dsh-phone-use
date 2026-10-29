@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-  dsh-mi-phone-use 底层执行器：小米互联（跨屏协作）手机窗口的全后台操控。
+  dsh-phone-use 底层执行器：小米互联（跨屏协作）手机窗口的全后台操控。
 
 .DESCRIPTION
   设计参照同类 Windows 窗口后台操控实现
@@ -11,7 +11,7 @@
     - 点击/滑动/按键全部走窗口消息，不抢前台、不移动鼠标。
 
   调用方式（结果写文件，避免中文走控制台编码）：
-    powershell -NoProfile -ExecutionPolicy Bypass -File mi-phone.ps1 -RequestFile req.json -ResultFile res.json
+    powershell -NoProfile -ExecutionPolicy Bypass -File phone.ps1 -RequestFile req.json -ResultFile res.json
 
   请求 JSON：
     {"action":"info"}
@@ -301,7 +301,7 @@ namespace MiPhone
 
 [void][System.Reflection.Assembly]::LoadWithPartialName('System.Drawing')
 
-$dllDir = Join-Path $env:TEMP 'dsh-mi-phone-use'
+$dllDir = Join-Path $env:TEMP 'dsh-phone-use'
 if (-not (Test-Path $dllDir)) { New-Item -ItemType Directory -Path $dllDir -Force | Out-Null }
 
 # DLL 按源码内容 hash 命名：改过 C# 就自动换新文件，不用再手工 bump 版本号
@@ -772,7 +772,7 @@ function Invoke-PasteAt($target, [string]$text, [string]$at, [string]$menu, [int
   $ptM = ConvertTo-Point $menu $client
   # 主人实测：长按太短会退化成普通点击、菜单不弹；默认 1200ms。
   if ($holdMs -le 0) { $holdMs = 1200 }
-  $shotDir = Join-Path $env:TEMP 'dsh-mi-phone-use'
+  $shotDir = Join-Path $env:TEMP 'dsh-phone-use'
   if (-not (Test-Path $shotDir)) { New-Item -ItemType Directory -Path $shotDir -Force | Out-Null }
   $preShot = Join-Path $shotDir 'paste-pre.png'
   $afterShot = Join-Path $shotDir 'paste-after.png'
@@ -841,7 +841,7 @@ function Invoke-OpenMenu($target, [string]$at, [int]$holdMs, [string]$text) {
   $ptA = ConvertTo-Point $at $client
   # 主人实测：长按太短会退化成普通点击、菜单不弹；默认 1200ms。
   if ($holdMs -le 0) { $holdMs = 1200 }
-  $shotDir = Join-Path $env:TEMP 'dsh-mi-phone-use'
+  $shotDir = Join-Path $env:TEMP 'dsh-phone-use'
   if (-not (Test-Path $shotDir)) { New-Item -ItemType Directory -Path $shotDir -Force | Out-Null }
   $bakPath = Join-Path $shotDir 'clip-backup.txt'
 
@@ -1534,7 +1534,7 @@ try {
       $result.did = @{ action = 'longpress'; px = $px; py = $py; ms = $ms }
     }
     'clip' {
-      $bak = Join-Path $env:TEMP 'dsh-mi-phone-use\clip-backup.txt'
+      $bak = Join-Path $env:TEMP 'dsh-phone-use\clip-backup.txt'
       $val = if ($null -ne $req.value) { [string]$req.value } else { $null }
       # "@restore" 是还原指令，不是要写入的文本。此前漏判会把字面量写进剪贴板。
       if ($val -eq '@restore') {
@@ -1649,7 +1649,7 @@ try {
           'clip' {
             if ($null -ne $st.value -and ([string]$st.value) -eq '@restore') {
               # 约定值：还原 openmenu/写入前备份的原剪贴板
-              $bak = Join-Path (Join-Path $env:TEMP 'dsh-mi-phone-use') 'clip-backup.txt'
+              $bak = Join-Path (Join-Path $env:TEMP 'dsh-phone-use') 'clip-backup.txt'
               if (Test-Path $bak) {
                 $prev = [IO.File]::ReadAllText($bak, [System.Text.UTF8Encoding]::new($false))
                 Set-Clipboard -Value $prev -ErrorAction Stop
@@ -1660,7 +1660,7 @@ try {
               }
             } elseif ($null -ne $st.value) {
               # 写入新内容前先备份一次原剪贴板（只在还没备份时存）
-              $bak = Join-Path (Join-Path $env:TEMP 'dsh-mi-phone-use') 'clip-backup.txt'
+              $bak = Join-Path (Join-Path $env:TEMP 'dsh-phone-use') 'clip-backup.txt'
               if (-not (Test-Path $bak)) {
                 try {
                   $prev = Get-Clipboard -Raw -ErrorAction Stop

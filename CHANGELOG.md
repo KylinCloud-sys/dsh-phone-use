@@ -1,5 +1,18 @@
 # CHANGELOG
 
+## 0.4.0 — 2026-10-29
+
+**项目改名为 `dsh-phone-use`**，为后续支持 adb 与其他品牌机型做准备。
+
+- 包名 `dsh-mi-phone-use` → `dsh-phone-use`，目录同步改名。
+- MCP serverName `miphone` → `phone`，工具前缀变为 `mcp__phone__phone_wake` 等。
+- 技能名 `mi-phone` → `phone`；插件 id `mi-phone-use` → `phone-use`。
+- 脚本 `scripts/mi-phone.ps1` → `scripts/phone.ps1`。
+- 临时目录 `%TEMP%\dsh-mi-phone-use` → `%TEMP%\dsh-phone-use`。
+- **去掉全部环境变量依赖**：此前 `index.js` 用 `mkdtempSync` 生成随机目录并通过 `MI_PHONE_TMP` 传给 MCP 子进程，导致帧缓存位置每次不同、且与 `server.mjs` 的回退路径不一致。现在统一按 `os.tmpdir()/dsh-phone-use` 计算，零配置。
+- 修好 `package.json` 的 description 编码损坏（之前某次写入丢 BOM 导致中文变乱码）。
+- 小米通道内部标识（`MiPhone` C# 命名空间、`kMiScreenShareMainWindow` 等窗口类名、`MiSmartShareHandoff` 等进程名）**保留 mi 前缀**——它们专指小米实现，不应通用化。
+
 ## 0.3.12 — 2026-10-29
 
 - **中文输入增加硬性前置规则**（写入 skill，由使用插件的 AI 判断执行，插件不自动清空）：

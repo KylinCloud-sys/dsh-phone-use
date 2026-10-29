@@ -7,10 +7,10 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const PKG_DIR = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
-const SCRIPT = path.join(PKG_DIR, 'scripts', 'mi-phone.ps1')
+const SCRIPT = path.join(PKG_DIR, 'scripts', 'phone.ps1')
 
 function run(action, extra = {}, timeoutMs = 30000) {
-  const dir = path.join(os.tmpdir(), 'dsh-mi-phone-use')
+  const dir = path.join(os.tmpdir(), 'dsh-phone-use')
   fs.mkdirSync(dir, { recursive: true })
   const reqFile = path.join(dir, `sc-req-${Date.now()}.json`)
   const resFile = path.join(dir, `sc-res-${Date.now()}.json`)
@@ -40,7 +40,7 @@ function run(action, extra = {}, timeoutMs = 30000) {
 const line = (ok, label, detail = '') =>
   console.log(`${ok ? '  [OK]  ' : '  [FAIL]'} ${label}${detail ? ' — ' + detail : ''}`)
 
-console.log(`dsh-mi-phone-use 自检`)
+console.log(`dsh-phone-use 自检`)
 console.log(`插件目录: ${PKG_DIR}`)
 console.log(`Node: ${process.version}  PowerShell: ${process.env.PSModulePath ? 'ok' : '?'}`)
 console.log('')
@@ -58,7 +58,7 @@ if (info.ok) {
 }
 
 console.log('\n2) 截图')
-const cap = await run('capture', { out: path.join(os.tmpdir(), 'dsh-mi-phone-use', 'selfcheck.png') })
+const cap = await run('capture', { out: path.join(os.tmpdir(), 'dsh-phone-use', 'selfcheck.png') })
 if (cap.ok && cap.img?.path) {
   const size = fs.statSync(cap.img.path).size
   line(true, '截图成功', `${cap.img.w}x${cap.img.h}, ${Math.round(size / 1024)}KB`)
@@ -71,7 +71,7 @@ console.log('\n3) 后台点击（点画面中心，应无副作用）')
 const tap = await run('batch', {
   steps: [{ op: 'tap', at: '50,50' }, { op: 'wait', ms: 300 }],
   capture: true,
-  out: path.join(os.tmpdir(), 'dsh-mi-phone-use', 'selfcheck-tap.png'),
+  out: path.join(os.tmpdir(), 'dsh-phone-use', 'selfcheck-tap.png'),
 })
 line(tap.ok === true, '后台点击已执行', tap.ok ? '' : tap.error)
 
@@ -80,7 +80,7 @@ const ver = await run('batch', {
   steps: [{ op: 'tap', at: '50,50' }, { op: 'wait', ms: 300 }],
   capture: true,
   verify: [0, 0, 100, 100],
-  out: path.join(os.tmpdir(), 'dsh-mi-phone-use', 'selfcheck-verify.png'),
+  out: path.join(os.tmpdir(), 'dsh-phone-use', 'selfcheck-verify.png'),
 })
 line(ver.hit !== undefined, 'verify 可用', `hit=${ver.hit} tries=${ver.tries ?? 1} banner=${ver.banner ?? false}`)
 

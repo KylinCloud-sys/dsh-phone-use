@@ -1,31 +1,29 @@
-// dsh-mi-phone-use — DSH 插件入口
+// dsh-phone-use — DSH 插件入口
 //
 // 与 dsh-computer-use-win 同样的挂载方式：本文件只做两件事
-//   1. 注册技能 mi-phone（技能是 DSH 原生能力，MCP server 注册不了）
+//   1. 注册技能 phone（技能是 DSH 原生能力，MCP server 注册不了）
 //   2. 通过 @deepseek-ai/dsh-mcp-client 把 mcp/server.mjs 作为 stdio MCP 服务挂上
-// 工具由宿主注入，名字形如 mcp__miphone__phone_info，每个会话都有。
+// 工具由宿主注入，名字形如 mcp__phone__phone_info，每个会话都有。
 
 import { fileURLToPath } from 'node:url'
-import { mkdtempSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { SKILL_CONTENT } from './skill-content.mjs'
 
-export const name = 'mi-phone-use'
+export const name = 'phone-use'
 export const inject = ['tools']
 
 const SERVER = fileURLToPath(new URL('./mcp/server.mjs', import.meta.url))
 
 export function bridgeConfig() {
-  const root = mkdtempSync(path.join(os.tmpdir(), 'dsh-mi-phone-use-'))
+  // 临时目录由 mcp/server.mjs 自己按 os.tmpdir() 拼，不需要外部配置。
   return {
-    serverName: 'miphone',
+    serverName: 'phone',
     transport: 'stdio',
     command: process.execPath,
     args: [SERVER],
     env: {
       ELECTRON_RUN_AS_NODE: '1',
-      MI_PHONE_TMP: root,
     },
     toolCallTimeoutMs: 120000,
     failOnStartupError: false,
@@ -38,19 +36,19 @@ export async function apply(ctx) {
   if (skills && typeof skills.register === 'function') {
     try {
       skills.register({
-        name: 'mi-phone',
-        title: '小米互联手机操控 · 后台点按与输入',
+        name: 'phone',
+        title: '手机后台操控 · 点按与输入',
         description:
           '通过小米互联（跨屏协作）后台唤起/恢复并操控手机：截图、按百分比点击/滑动、输入中英文。' +
           '含硬规则：先 phone_wake，收到 unlockRequired 后提醒主人手动指纹解锁并等待确认；只用互联不打 adb、全后台不抢焦点、未经许可不发消息不下单、失败即停。',
         whenToUse:
           '用户要求操作手机（打开某个 App、点某个按钮、发消息、截图看手机屏幕、在手机上输入文字）时使用；' +
           '需要看手机当前画面、或要连续点按好几下时也用它。',
-        source: 'dsh-mi-phone-use',
+        source: 'dsh-phone-use',
         content: SKILL_CONTENT,
       })
     } catch (error) {
-      ctx.logger?.warn?.('dsh-mi-phone-use: 技能注册失败：%s', error?.message || error)
+      ctx.logger?.warn?.('dsh-phone-use: 技能注册失败：%s', error?.message || error)
     }
   }
 
@@ -60,13 +58,13 @@ export async function apply(ctx) {
     bridge = await import('@deepseek-ai/dsh-mcp-client')
   } catch (error) {
     ctx.logger?.error?.(
-      'dsh-mi-phone-use: 缺少 @deepseek-ai/dsh-mcp-client，手机工具不可用：%s',
+      'dsh-phone-use: 缺少 @deepseek-ai/dsh-mcp-client，手机工具不可用：%s',
       error?.message || error,
     )
     return
   }
   const config = bridgeConfig()
-  ctx.logger?.info?.('dsh-mi-phone-use: 挂载 MCP server（serverName=%s）', config.serverName)
+  ctx.logger?.info?.('dsh-phone-use: 挂载 MCP server（serverName=%s）', config.serverName)
   const connection = ctx.plugin(bridge, config)
   await connection
 }

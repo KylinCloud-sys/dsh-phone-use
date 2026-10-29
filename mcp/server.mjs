@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// dsh-mi-phone-use — MCP stdio server
+// dsh-phone-use — MCP stdio server
 //
 // 由 @deepseek-ai/dsh-mcp-client 拉起（见 mcp/dsh-plugin.mjs），
-// 工具以 mcp__miphone__* 的形式出现在每个会话里。
+// 工具以 mcp__phone__* 的形式出现在每个会话里。
 //
 // 传输：JSON-RPC 2.0，同时兼容「一行一条 JSON」与「Content-Length 头」两种分帧。
 
@@ -14,11 +14,12 @@ import { fileURLToPath } from 'node:url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PKG_DIR = path.resolve(__dirname, '..')
-const SCRIPT = path.join(PKG_DIR, 'scripts', 'mi-phone.ps1')
+const SCRIPT = path.join(PKG_DIR, 'scripts', 'phone.ps1')
 const CONFIG_FILE = path.join(PKG_DIR, 'config.json')
-const BASE = process.env.MI_PHONE_TMP || path.join(os.tmpdir(), 'dsh-mi-phone-use')
+// 固定目录：不依赖任何环境变量，装好就能用。每次 mkdtemp 会让帧缓存位置飘忽，没必要。
+const BASE = path.join(os.tmpdir(), 'dsh-phone-use')
 const MCP_PROTOCOL_VERSION = '2024-11-05'
-const SERVER_NAME = 'miphone'
+const SERVER_NAME = 'phone'
 
 let SERVER_VERSION = '0.2.0'
 try {
@@ -355,7 +356,7 @@ async function dispatch(msg) {
       result: {
         protocolVersion: params?.protocolVersion || MCP_PROTOCOL_VERSION,
         capabilities: { tools: { listChanged: false } },
-        serverInfo: { name: 'dsh-mi-phone-use', version: SERVER_VERSION },
+        serverInfo: { name: 'dsh-phone-use', version: SERVER_VERSION },
       },
     }
   }
@@ -426,10 +427,10 @@ async function onMessage(raw) {
 process.stdin.on('data', ingest)
 process.stdin.on('error', () => {})
 process.on('uncaughtException', (e) => {
-  process.stderr.write(`dsh-mi-phone-use mcp: ${e?.stack || e}\n`)
+  process.stderr.write(`dsh-phone-use mcp: ${e?.stack || e}\n`)
 })
 process.on('unhandledRejection', (e) => {
-  process.stderr.write(`dsh-mi-phone-use mcp rejection: ${e?.stack || e}\n`)
+  process.stderr.write(`dsh-phone-use mcp rejection: ${e?.stack || e}\n`)
 })
 
 // --self-test：不连宿主，直接跑一遍工具，便于排查
