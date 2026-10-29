@@ -150,7 +150,7 @@ function normalizeSteps(steps) {
 const TOOLS = [
   {
     name: 'phone_wake',
-    description: '全后台唤起/恢复小米互联并等待真实手机画面（不点任务栏、不发 SendInput、不动鼠标、不抢焦点）。按 state 区分：ready/restored/started 时返回 unlockRequired=true，必须让主人在手机上手动指纹解锁并等确认；screen-not-projected 表示窗口在但画面空白，多半不在同一局域网，此时不需要解锁；phone-not-found 表示设备不在附近或不在同一局域网。插件绝不点击锁屏、授权或配对按钮。',
+    description: '全后台唤起/恢复小米互联并等待真实手机画面（不点任务栏、不发 SendInput、不动鼠标、不抢焦点）。插件按「纯色 → 动态 → OCR」三套判据综合判定：每 2 秒走一套，共 5 套（10 秒）。state 含义：ready/restored/started=已解锁有真实画面；awaiting-unlock=已连上但手机锁屏，必须让主人手动指纹解锁并等确认；connect-failed=连不上（读到「加载失败」，或等满 10 秒仍是「正在连接」）；screen-not-projected=窗口在但画面空白；phone-not-found=设备不在附近或不在同一局域网。插件绝不点击锁屏、授权或配对按钮。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -161,7 +161,7 @@ const TOOLS = [
     async handler(args = {}) {
       const timeoutMs = Number.isFinite(Number(args.timeoutMs)) ? Number(args.timeoutMs) : 15000
       const bounded = Math.max(3000, Math.min(60000, Math.trunc(timeoutMs)))
-      const r = await run({ action: 'wake', timeoutMs: bounded }, bounded + 15000)
+      const r = await run({ action: 'wake', timeoutMs: bounded }, bounded + 25000)
       // 失败：把 state / deviceState / userActionRequired / error 原样透出，
       // 调用方才能区分「设备不在场」「还在连」「连不上」「客户端缺失」。
       if (r.ok === false) {
@@ -175,6 +175,7 @@ const TOOLS = [
             restored: !!r.restored,
             unlockRequired: false,
             errorPage: r.errorPage,
+            evidence: r.evidence,
             ocrAvailable: r.ocrAvailable,
             ocrHint: r.ocrHint,
             error: r.error,
@@ -195,6 +196,7 @@ const TOOLS = [
           restored: !!r.restored,
           unlockRequired: r.unlockRequired === true,
           unlockState: r.unlockState,
+          evidence: r.evidence,
           ocrAvailable: r.ocrAvailable,
           ocrHint: r.ocrHint,
           userPrompt: r.userPrompt,

@@ -502,8 +502,7 @@ function Invoke-Capture($target, [string]$out, [string]$prev, $region, [int]$max
     $stepY = [math]::Max(1, [int]($crop.Height / 96))
     $colors = New-Object 'System.Collections.Generic.HashSet[string]'
     $colorCount = New-Object 'System.Collections.Generic.Dictionary[string,int]'
-    $sum = 0.0; $sum2 = 0.0; $n = 0; $darkCount = 0; $blueCount = 0
-    $blueMinX = [int]::MaxValue; $blueMinY = [int]::MaxValue; $blueMaxX = -1; $blueMaxY = -1
+    $sum = 0.0; $sum2 = 0.0; $n = 0; $darkCount = 0
 
     for ($sy = 0; $sy -lt $crop.Height; $sy += $stepY) {
       for ($sx = 0; $sx -lt $crop.Width; $sx += $stepX) {
@@ -514,50 +513,25 @@ function Invoke-Capture($target, [string]$out, [string]$prev, $region, [int]$max
         [void]$colors.Add($key)
         if ($colorCount.ContainsKey($key)) { $colorCount[$key]++ } else { $colorCount[$key] = 1 }
         if ($c.R -lt 60 -and $c.G -lt 60 -and $c.B -lt 60) { $darkCount++ }
-
-        if ($c.B -gt 150 -and ($c.B - $c.R) -gt 80) {
-          $blueCount++
-          if ($sx -lt $blueMinX) { $blueMinX = $sx }
-          if ($sx -gt $blueMaxX) { $blueMaxX = $sx }
-          if ($sy -lt $blueMinY) { $blueMinY = $sy }
-          if ($sy -gt $blueMaxY) { $blueMaxY = $sy }
-        }
       }
     }
     if ($n -gt 0) {
       $mean = $sum / $n
       $sd = [math]::Sqrt([math]::Max(0.0, ($sum2 / $n) - ($mean * $mean)))
-      # 主色占比：投屏未建立时画面几乎被单一底色占满（实测加载态 97% 纯白）。
-      # 真实手机画面即使背景素，也总有文字/图标把主色压到 90% 以下。
+      # 主色占比：投屏未建立时画面几乎被单一底色占满（实测占位页 96%~100% 纯白）。
+      # 真实手机画面即使背景素，也总有文字/图标把主色压到 94% 以下（实测 0.824）。
       $top = 0
       foreach ($kv in $colorCount.GetEnumerator()) { if ($kv.Value -gt $top) { $top = $kv.Value } }
       $dominant = [double]$top / [double]$n
       $result.colors = $colors.Count
       $result.dominant = [math]::Round($dominant, 3)
       $result.stdev = [math]::Round($sd, 2)
-      # 占位页判定：单一主色占满（加载/失败/解锁页几乎全白），
-      # 或整屏过暗（窗口刚创建、内容未渲染的黑屏，实测 dominant=0.74 且 74% 是黑）。
+      # 占位页判定：单一主色占满（连接中/失败/解锁页实测 0.963~1.0），
+      # 或整屏过暗（窗口刚创建、内容未渲染的黑屏）。
+      # 注意：这一条只能判"是不是占位页"，判不出是哪一页——三页数值几乎一样。
       $darkRatio = $darkCount / [double]$n
       $result.blank = (($dominant -ge 0.94) -or ($darkRatio -ge 0.60))
-      $result.dark = [math]::Round($darkCount / [double]$n, 4)
-      $result.blue = [math]::Round($blueCount / [double]$n, 4)
-      # 蓝色元素包围盒占比：解锁提示页有一整幅蓝色手绘插图（占宽 54%、占高 31%），
-      # 加载失败页只有一行蓝色小字（包围盒极小）。用这个区分"已连上待解锁"和"连不上"。
-      $blueWide = 0.0; $blueTall = 0.0
-      if ($blueCount -gt 0 -and $blueMaxX -ge $blueMinX -and $blueMaxY -ge $blueMinY) {
-        $blueWide = ($blueMaxX - $blueMinX + 1) / [double]$crop.Width
-        $blueTall = ($blueMaxY - $blueMinY + 1) / [double]$crop.Height
-      }
-      $result.blueWide = [math]::Round($blueWide, 3)
-      $result.blueTall = [math]::Round($blueTall, 3)
-      # 解锁提示页：蓝色插图够大 + 有黑色标题字
-      $result.unlockPage = ($result.blank -and $blueWide -ge 0.30 -and $blueTall -ge 0.15 -and ($darkCount / [double]$n) -gt 0.001)
-      # 加载失败页：有蓝字但没有大插图
-      $result.errorPage = $result.blank -and (-not $result.unlockPage)
-
-
-
-
+      $result.dark = [math]::Round($darkRatio, 4)
     }
   } catch { }
 
@@ -586,17 +560,17 @@ function Invoke-Capture($target, [string]$out, [string]$prev, $region, [int]$max
     $crop.Save($out, [System.Drawing.Imaging.ImageFormat]::Png)
     $result.path = $out
 
-    # OCR 是最可靠的判据：直接读画面上的文字。
-    # 只认三个已知占位页的关键词；真实画面（桌面/视频/App）不会命中，因此不会误判。
-    $ocr = Get-SurfaceOcrText $out
-    if ($ocr) {
-      $result.ocr = $ocr
-      $result.ocrConnecting = ($ocr -match '正在连接')
-      $result.ocrUnlock     = ($ocr -match '手机解锁' -or $ocr -match '请在手机端解锁')
-      $result.ocrFailed     = ($ocr -match '加载失败' -or $ocr -match '小米社区反馈')
-      if ($result.ocrUnlock) { $result.unlockPage = $true; $result.blank = $true }
-      if ($result.ocrFailed) { $result.unlockPage = $false; $result.errorPage = $true; $result.blank = $true }
-      if ($result.ocrConnecting) { $result.connectingPage = $true; $result.blank = $true }
+    # OCR：只读占位页上的文字，用来在"静止的占位页"里区分待解锁 / 连接失败。
+    # 真实画面（桌面/视频/App）OCR 出来是噪声，不会命中关键词，因此不会误判。
+    # 注意：OCR 只在需要时（占位页）才跑，真实画面不浪费这一秒。
+    if ($result.blank) {
+      $ocr = Get-SurfaceOcrText $out
+      if ($ocr) {
+        $result.ocr = $ocr
+        $result.ocrConnecting = [bool]($ocr -match '正在连接' -or $ocr -match '连接中')
+        $result.ocrUnlock     = [bool]($ocr -match '手机解锁' -or $ocr -match '请在手机端解锁' -or $ocr -match '请在手机上解锁' -or $ocr -match '解锁手机')
+        $result.ocrFailed     = [bool]($ocr -match '加载失败' -or $ocr -match '无法连接' -or $ocr -match '连接失败' -or $ocr -match '小米社区反馈')
+      }
     }
 
     # 变化区域够小就额外产一张裁图：调一次拿两样，省 token
@@ -1080,8 +1054,10 @@ function Resolve-ScreenShareExecutable([string]$exeName = 'MiSmartShareHandoff.e
   return $null
 }
 
-# 画面是不是"空壳"：纯色/近纯色说明投屏还没真正开始。
-function Get-SurfaceStats($target) {
+# 采样一帧画面，返回纯色统计（-Ocr 时才读文字）。
+# 这里只负责"读"，不负责"判"——判定在 Invoke-Wake 里按 纯色 → 动态 → OCR 的顺序做。
+# OCR 要 1 秒多，只在确认"静止占位页"时才值得跑，所以默认关掉。
+function Get-SurfaceStats($target, [bool]$WantOcr = $false) {
   $tmp = Join-Path ([IO.Path]::GetTempPath()) ('mi-surface-' + [guid]::NewGuid().ToString('N') + '.png')
   try {
     $null = Invoke-Capture $target $tmp $null $null 0
@@ -1091,8 +1067,7 @@ function Get-SurfaceStats($target) {
       $stepX = [math]::Max(1, [int]($bmp.Width / 96))
       $stepY = [math]::Max(1, [int]($bmp.Height / 96))
       $colorCount = New-Object 'System.Collections.Generic.Dictionary[string,int]'
-      $sum = 0.0; $sum2 = 0.0; $n = 0; $darkCount = 0; $blueCount = 0
-    $blueMinX = [int]::MaxValue; $blueMinY = [int]::MaxValue; $blueMaxX = -1; $blueMaxY = -1
+      $sum = 0.0; $sum2 = 0.0; $n = 0; $darkCount = 0
 
       for ($y = 0; $y -lt $bmp.Height; $y += $stepY) {
         for ($x = 0; $x -lt $bmp.Width; $x += $stepX) {
@@ -1102,13 +1077,6 @@ function Get-SurfaceStats($target) {
           $key = "$([int]($c.R / 16)):$([int]($c.G / 16)):$([int]($c.B / 16))"
           if ($colorCount.ContainsKey($key)) { $colorCount[$key]++ } else { $colorCount[$key] = 1 }
           if ($c.R -lt 60 -and $c.G -lt 60 -and $c.B -lt 60) { $darkCount++ }
-          if ($c.B -gt 150 -and ($c.B - $c.R) -gt 80) {
-            $blueCount++
-            if ($x -lt $blueMinX) { $blueMinX = $x }
-            if ($x -gt $blueMaxX) { $blueMaxX = $x }
-            if ($y -lt $blueMinY) { $blueMinY = $y }
-            if ($y -gt $blueMaxY) { $blueMaxY = $y }
-          }
         }
       }
       if ($n -eq 0) { return $null }
@@ -1117,26 +1085,22 @@ function Get-SurfaceStats($target) {
       $top = 0
       foreach ($kv in $colorCount.GetEnumerator()) { if ($kv.Value -gt $top) { $top = $kv.Value } }
       $dominant = [double]$top / [double]$n
-      $bw2 = 0.0; $bt2 = 0.0
-      if ($blueCount -gt 0 -and $blueMaxX -ge $blueMinX -and $blueMaxY -ge $blueMinY) {
-        $bw2 = ($blueMaxX - $blueMinX + 1) / [double]$bmp.Width
-        $bt2 = ($blueMaxY - $blueMinY + 1) / [double]$bmp.Height
-      }
+      $darkRatio = $darkCount / [double]$n
+      # 占位页：单一主色占满 或 整屏过暗。
+      # 实测连接中 0.974 / 待解锁 0.963 / 连接失败 0.968，真实画面 0.389~0.824。
+      $isBlank = (($dominant -ge 0.94) -or ($darkRatio -ge 0.60))
+      # OCR 要 1 秒多，只在"确认是占位页 + 调用方明确要文字"时才跑。
+      $ocr = $null
+      if ($WantOcr -and $isBlank) { $ocr = Get-SurfaceOcrText $tmp }
       return @{
         colors   = $colorCount.Count
         mean     = [math]::Round($mean, 1)
         stdev    = [math]::Round($sd, 2)
         dominant = [math]::Round($dominant, 3)
-        blank    = (($dominant -ge 0.94) -or (($darkCount / [double]$n) -ge 0.60))
+        dark     = [math]::Round($darkRatio, 4)
+        blank    = $isBlank
         hash     = [MiPhone.Img]::Hash($bmp)
-        # 失败页特征（主人实测）：黑字标题 + 蓝色链接同时存在。
-        # 连接页是彩色圆点，黑字极少，可据此区分。
-        dark  = [math]::Round($darkCount / [double]$n, 4)
-        blue  = [math]::Round($blueCount / [double]$n, 4)
-        blueWide = [math]::Round($bw2, 3)
-        blueTall = [math]::Round($bt2, 3)
-        unlockPage = (($dominant -ge 0.94) -and $bw2 -ge 0.30 -and $bt2 -ge 0.15 -and ($darkCount / [double]$n) -gt 0.001)
-        errorPage = (((($dominant -ge 0.94) -or (($darkCount / [double]$n) -ge 0.60))) -and -not ($bw2 -ge 0.30 -and $bt2 -ge 0.15))
+        ocr      = $ocr
       }
     } finally { $bmp.Dispose() }
   } catch {
@@ -1302,10 +1266,7 @@ function Invoke-Wake($spec, $req) {
   }
 
   $deadline = (Get-Date).AddMilliseconds($timeoutMs)
-  $blankOnce = $false
   $aspectReject = $false
-  $lastTarget = $null
-  $lastStats = $null
   $launcherClicked = $false
   while ((Get-Date) -lt $deadline) {
     $parent = [MiPhone.Native]::FindParent($spec.Titles, $spec.ParentClass, $true)
@@ -1332,32 +1293,102 @@ function Invoke-Wake($spec, $req) {
         $client = Get-ClientInfo $child
         if (Test-PhoneAspect $client.W $client.H) {
           $target = @{ Parent = $parent; Child = $child }
-          # 画面会经历 黑屏 → 加载页 → 解锁页/失败页 的快速过渡，单次采样容易误判。
-          # 连续采样到状态稳定（连续 2 次判定一致）或超时，再下结论。
-          $stats = $null
-          $prevKey = $null
-          $stableCount = 0
-          for ($probe = 0; $probe -lt 8; $probe++) {
-            $s = Get-SurfaceStats $target
-            if ($null -ne $s) {
-              $key = if ($s.unlockPage) { 'unlock' } elseif ($s.blank) { 'placeholder' } else { 'content' }
-              if ($key -eq $prevKey) { $stableCount++ } else { $stableCount = 0 }
-              $prevKey = $key
-              $stats = $s
-              # 连续两次一致即认为稳定；真实内容也要求稳定，避免把过渡帧当成 ready
-              if ($stableCount -ge 1) { break }
+          # ---- 三页判定（主人实测数据）----
+          #   已解锁    : 不是纯色占位（dominant < 0.94 且 dark < 0.60，实测真实画面 0.389~0.824）
+          #   连接中    : 纯色占位 + 画面在动（两个彩色圆点跳动，哈希持续变化）
+          #   待解锁    : 纯色占位 + 静止 + OCR 命中「手机解锁」
+          #   连接失败  : 纯色占位 + 静止 + OCR 命中「加载失败」
+          # 三页的 dominant/dark 几乎一样（0.963/0.974/0.968），纯色只能判"是不是占位页"。
+          # 判定顺序固定为 纯色 → 动态 → OCR，每 2 秒走一套，共 5 套（10 秒）。
+          # 计时按真实墙钟算，保证 10 秒能走完 5 套（OCR 只跑一次，不拖垮节奏）。
+          $rounds = 5
+          $roundMs = 2000
+          $verdict = $null
+          $evidence = $null
+          $startAt = Get-Date
+          for ($round = 1; $round -le $rounds; $round++) {
+            $roundStart = Get-Date
+            # ① 纯色 + ② 动态：连拍 2 帧（不跑 OCR，快），比哈希看画面在不在动
+            $a = Get-SurfaceStats $target
+            Start-Sleep -Milliseconds 250
+            $b = Get-SurfaceStats $target
+            if ($null -eq $a -and $null -eq $b) {
+              $remain = $roundMs - ((Get-Date) - $roundStart).TotalMilliseconds
+              if ($remain -gt 0) { Start-Sleep -Milliseconds ([int]$remain) }
+              continue
             }
-            Start-Sleep -Milliseconds 500
+            if ($null -eq $b) { $b = $a }
+            if ($null -eq $a) { $a = $b }
+            $animating = ($a.hash -ne $b.hash)
+            $cur = $b
+            $ocrText = ''
+            $hitUnlock = $false; $hitConnecting = $false; $hitFailed = $false
+            # ① 纯色判据：不是占位页 = 真实画面 = 已解锁，立即返回
+            if (-not $cur.blank) {
+              $evidence = @{
+                round = $round; elapsedMs = [int]((Get-Date) - $startAt).TotalMilliseconds
+                dominant = $cur.dominant; dark = $cur.dark; colors = $cur.colors
+                animating = $animating; verdict = 'unlocked'
+              }
+              $verdict = 'unlocked'
+              break
+            }
+            # ② 动态判据：占位 + 在动 = 连接中，继续等下一套
+            if ($animating) {
+              $evidence = @{
+                round = $round; elapsedMs = [int]((Get-Date) - $startAt).TotalMilliseconds
+                dominant = $cur.dominant; dark = $cur.dark; colors = $cur.colors
+                animating = $true; verdict = 'connecting'
+              }
+              $verdict = 'connecting'
+              $remain = $roundMs - ((Get-Date) - $roundStart).TotalMilliseconds
+              if ($remain -gt 0) { Start-Sleep -Milliseconds ([int]$remain) }
+              continue
+            }
+            # ③ OCR 判据：占位 + 静止，才值得花 1 秒读文字
+            $withOcr = Get-SurfaceStats $target -WantOcr $true
+            if ($null -ne $withOcr -and $withOcr.ocr) { $ocrText = [string]$withOcr.ocr }
+            $hitUnlock     = [bool]($ocrText -match '手机解锁' -or $ocrText -match '请在手机端解锁' -or $ocrText -match '请在手机上解锁' -or $ocrText -match '解锁手机')
+            $hitConnecting = [bool]($ocrText -match '正在连接' -or $ocrText -match '连接中')
+            $hitFailed     = [bool]($ocrText -match '加载失败' -or $ocrText -match '无法连接' -or $ocrText -match '连接失败' -or $ocrText -match '小米社区反馈')
+            $evidence = @{
+              round = $round; elapsedMs = [int]((Get-Date) - $startAt).TotalMilliseconds
+              dominant = $cur.dominant; dark = $cur.dark; colors = $cur.colors
+              animating = $false; ocr = $ocrText
+              hitUnlock = $hitUnlock; hitConnecting = $hitConnecting; hitFailed = $hitFailed
+            }
+            if ($hitUnlock) { $verdict = 'awaiting-unlock'; break }
+            if ($hitFailed) { $verdict = 'connect-failed'; break }
+            # 静止占位但读到「正在连接」：仍算连接中，继续等
+            if ($hitConnecting) {
+              $verdict = 'connecting'
+              $remain = $roundMs - ((Get-Date) - $roundStart).TotalMilliseconds
+              if ($remain -gt 0) { Start-Sleep -Milliseconds ([int]$remain) }
+              continue
+            }
+            # 占位 + 静止 + 没读到任何关键词：OCR 没装或画面还没渲染好，下一套再看
+            $verdict = 'unknown-placeholder'
+            $remain = $roundMs - ((Get-Date) - $roundStart).TotalMilliseconds
+            if ($remain -gt 0) { Start-Sleep -Milliseconds ([int]$remain) }
           }
-          # 「手机解锁」提示页 = 投屏已连上、只差主人解锁，属于成功唤起。
-          # 优先用 OCR 判定（最可靠）；OCR 不可用时回退到几何判据。
-          $isUnlockPage = ($null -ne $stats -and $stats.unlockPage -eq $true)
-          $isConnectingPage = ($null -ne $stats -and $stats.connectingPage -eq $true)
-          if ($isConnectingPage) {
-            # 连接页：还在建立投屏，不是失败也不是就绪。继续等，让外层循环处理。
-            $stats = $stats
+
+          if ($verdict -eq 'unlocked') {
+            $info = Get-WindowInfo $target
+            $info.action = 'wake'
+            $info.state = if ($started) { 'started' } elseif ($restored) { 'restored' } else { 'ready' }
+            $info.surface = 'ready'
+            $info.started = $started
+            $info.restored = $restored
+            $info.aspect = [math]::Round([double]$client.W / [double]$client.H, 3)
+            $info.unlockRequired = $false
+            $info.unlockState = 'unlocked'
+            $info.evidence = $evidence
+            $info.userPrompt = '小米互联画面已就绪，手机看起来已解锁，可以继续操作。若发现画面仍是锁屏，请主人手动指纹解锁。插件不会代为解锁。'
+            $info.ocrAvailable = (Test-OcrAvailable)
+            $info.ocrHint = (Get-OcrHint)
+            return $info
           }
-          if ($isUnlockPage) {
+          if ($verdict -eq 'awaiting-unlock') {
             $info = Get-WindowInfo $target
             $info.action = 'wake'
             $info.state = 'awaiting-unlock'
@@ -1368,29 +1399,32 @@ function Invoke-Wake($spec, $req) {
             $info.unlockRequired = $true
             $info.unlockState = 'locked'
             $info.ok = $true
+            $info.evidence = $evidence
             $info.userPrompt = '小米互联已连上，手机处于锁屏状态。请主人在手机上手动完成指纹解锁；解锁完成并确认后再继续操作。插件不会代为解锁。'
             return $info
           }
-          if ($null -ne $stats -and -not $stats.blank) {
-            $info = Get-WindowInfo $target
-            $info.action = 'wake'
-            $info.state = if ($started) { 'started' } elseif ($restored) { 'restored' } else { 'ready' }
-            $info.surface = 'ready'
-            $info.started = $started
-            $info.restored = $restored
-            $info.aspect = [math]::Round([double]$client.W / [double]$client.H, 3)
-            # 画面已有真实内容（不是解锁提示页）说明手机已解锁可直接操作；
-            # 但仍无法 100% 排除锁屏壁纸等情形，故标记 unknown 并在需要时提示。
-            $info.unlockRequired = $false
-            $info.unlockState = 'unlocked'
-            $info.userPrompt = '小米互联画面已就绪，手机看起来已解锁，可以继续操作。若发现画面仍是锁屏，请主人手动指纹解锁。插件不会代为解锁。'
-            $info.ocrAvailable = (Test-OcrAvailable)
-            $info.ocrHint = (Get-OcrHint)
-            return $info
+          if ($verdict -eq 'connect-failed' -or $verdict -eq 'connecting' -or $verdict -eq 'unknown-placeholder') {
+            # 走完 5 套（10 秒）仍是连接中 / 一直停在占位页读不到文字 → 都算连接失败。
+            # 「直接报连接失败」这一路已由上面的 hitFailed 提前 return。
+            $isConn = ($verdict -eq 'connecting')
+            return @{
+              ok = $false; action = 'wake'
+              state = 'connect-failed'
+              deviceState = 'not-connected'
+              started = $started; restored = $restored
+              unlockRequired = $false
+              evidence = $evidence
+              userActionRequired = if ($isConn) {
+                '投屏等了 10 秒还在连接中，判定为连接失败。请确认手机和电脑在同一局域网、手机端小米互联已开启，然后重新发起投屏。此时不需要指纹解锁。'
+              } else {
+                '投屏没连上，画面停在占位页。请确认手机和电脑在同一局域网、手机端小米互联已开启，然后重新发起投屏。此时不需要指纹解锁。'
+              }
+              error = if ($isConn) { '投屏等了 10 秒仍未连上。' } else { '投屏没连上，画面停在占位页。' }
+              errorPage = $true
+              ocrAvailable = (Test-OcrAvailable)
+              ocrHint = (Get-OcrHint)
+            }
           }
-          $blankOnce = $true
-          $lastTarget = $target
-          $lastStats = $stats
         } elseif ($client.W -gt 0 -and $client.H -gt 0) {
           $aspectReject = $true
         }
@@ -1403,45 +1437,6 @@ function Invoke-Wake($spec, $req) {
     return @{
       ok = $false; action = 'wake'; state = 'launch-failed'; started = $started
       unlockRequired = $false; error = "启动小米互联失败：$launchError"
-    }
-  }
-  if ($blankOnce) {
-    # 判"连接中"还是"已失败"，按可靠性排序：
-    # 1) 失败页颜色特征（黑字标题 + 蓝链接，主人实测）—— 最可靠
-    # 2) 画面是否在动 —— 连接中有跳动圆点；注意桌面静止时也不动，故只作兜底
-
-    # 判据只用 OCR 读到的文字（最可靠）。能直接读到「正在连接」「加载失败」「手机解锁」，
-    # 真实画面（桌面/视频/App）OCR 出来是噪声，不会命中关键词，因此不会误判。
-    $ocrConnecting = ($null -ne $lastStats -and $lastStats.ocrConnecting -eq $true)
-    $ocrFailed     = ($null -ne $lastStats -and $lastStats.ocrFailed -eq $true)
-    if ($ocrFailed) {
-      $connecting = $false
-      $isErrorPage = $true
-    } elseif ($ocrConnecting) {
-      $connecting = $true
-      $isErrorPage = $false
-    } else {
-      # OCR 不可用（如未装中文语言包）时无法区分连接页/失败页，按失败处理并提示排查
-      $connecting = $false
-      $isErrorPage = $true
-    }
-    return @{
-      ok = $false; action = 'wake'
-      state = if ($connecting) { 'connecting' } else { 'connect-failed' }
-      deviceState = 'not-connected'
-      started = $started; restored = $restored
-      unlockRequired = $false
-      userActionRequired = if ($connecting) {
-        '投屏正在连接中，请稍等片刻再让我唤醒一次。此时不需要指纹解锁。'
-      } elseif ($isErrorPage) {
-        '投屏没连上，画面停在「加载失败」页。请确认手机和电脑在同一局域网、手机端小米互联已开启，然后重新发起投屏。此时不需要指纹解锁。'
-      } else {
-        '投屏没连上，画面停在加载页且没有任何变化。请确认手机和电脑在同一局域网、手机端小米互联已开启，然后重新发起投屏。此时不需要指纹解锁。'
-      }
-      error = if ($connecting) { '投屏仍在连接中。' } elseif ($isErrorPage) { '投屏连接失败（加载失败页）。' } else { '投屏连接失败（画面无变化）。' }
-      errorPage = $isErrorPage
-      ocrAvailable = (Test-OcrAvailable)
-      ocrHint = (Get-OcrHint)
     }
   }
   if ($aspectReject) {
