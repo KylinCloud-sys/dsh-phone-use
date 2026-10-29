@@ -137,6 +137,12 @@ function normalizeSteps(steps) {
     else if (raw.openmenu !== undefined) out.push({ op: 'openmenu', at: String(raw.openmenu), text: raw.text ? String(raw.text) : '', ms: raw.ms ?? 900, danger: false })
     else if (raw.text !== undefined) out.push({ op: 'text', value: String(raw.text), at: raw.at ? String(raw.at) : '', menu: raw.menu ? String(raw.menu) : '', danger })
     else if (raw.key !== undefined) out.push({ op: 'key', name: String(raw.key), n: raw.n ?? 1, danger })
+    else if (raw.panel !== undefined) {
+      const side = String(raw.panel)
+      if (side !== 'control' && side !== 'notification') throw new Error('panel 只能是 control 或 notification')
+      out.push({ op: 'panel', side, danger: false })
+    }
+    else if (raw.back !== undefined && raw.back !== false) out.push({ op: 'back', danger: false })
     else if (raw.wait !== undefined) out.push({ op: 'wait', ms: Number(raw.wait) || 300 })
     else if (raw.clip !== undefined) out.push({ op: 'clip', value: raw.clip === true || raw.clip === 'read' ? null : String(raw.clip) })  // '@restore' 原样传给 PS 层判断
     else throw new Error(`无法识别的步骤：${JSON.stringify(raw)}`)
@@ -249,8 +255,46 @@ const TOOLS = [
     },
   },
   {
+    name: 'phone_panel',
+    description: '打开手机的系统面板（后台手势，不抢焦点）。side="control" 打开控制中心（快捷开关/亮度/音量），side="notification" 打开通知栏。关闭用 phone_back。面板已打开时会先返回再重新拉，避免叠在一起。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        side: { type: 'string', enum: ['control', 'notification'], description: 'control=控制中心（默认），notification=通知栏' },
+      },
+      additionalProperties: false,
+    },
+    async handler(args = {}) {
+      const side = args.side === 'notification' ? 'notification' : 'control'
+      const r = await run({ action: 'panel', side }, 30000)
+      if (r.ok === false) return { text: { ok: false, error: r.error } }
+      const did = r.did || {}
+      return {
+        text: {
+          ok: true,
+          action: 'panel',
+          side: did.side || side,
+          s: [r.screen.w, r.screen.h],
+          hint: side === 'control'
+            ? '控制中心已打开。关闭用 phone_back。'
+            : '通知栏已打开。关闭用 phone_back。',
+        },
+      }
+    },
+  },
+  {
+    name: 'phone_back',
+    description: '执行系统返回手势（从右边缘往左滑，后台，不抢焦点）。用于：关闭通知栏/控制中心、App 内返回上一页。相当于按手机的返回键/返回手势。',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    async handler() {
+      const r = await run({ action: 'back' }, 30000)
+      if (r.ok === false) return { text: { ok: false, error: r.error } }
+      return { text: { ok: true, action: 'back', s: [r.screen.w, r.screen.h] } }
+    },
+  },
+  {
     name: 'phone_do',
-    description: '在小米互联手机上批量执行动作（后台）。steps 支持 tap/swipe/longpress/text/key/wait/clip，坐标为画面区百分比。一次调用可串多步，执行完自动截图并按变化量返回裁图。',
+    description: '在小米互联手机上批量执行动作（后台）。steps 支持 tap/swipe/longpress/text/key/wait/clip/panel/back，坐标为画面区百分比。一次调用可串多步，执行完自动截图并按变化量返回裁图。',
     inputSchema: {
       type: 'object',
       properties: {

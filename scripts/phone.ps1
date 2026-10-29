@@ -677,19 +677,61 @@ function Invoke-Tap($target, [int]$x, [int]$y) {
 function Invoke-Swipe($target, [int]$x1, [int]$y1, [int]$x2, [int]$y2, [int]$ms) {
   $child = $target.Child
   if ($ms -lt 60) { $ms = 60 }
-  $steps = [int][math]::Max(6, [math]::Round($ms / 16.0))
+  # 用真实时钟推进，而不是"步数 × 固定睡眠"。
+  # Start-Sleep 在 Windows 上最小粒度约 15.6ms，实际常睡 20-30ms，
+  # 若按步数算时间，总耗时会膨胀 2-3 倍，画面表现为卡顿抽搐。
+  # 这里每步按"已流逝时间"反算位置，保证整体时长贴合 ms，轨迹均匀。
   $lp = New-LParam $x1 $y1
   [void][MiPhone.Native]::SendMessage($child, 0x0200, [IntPtr]::Zero, $lp)
   [void][MiPhone.Native]::SendMessage($child, 0x0201, [IntPtr]1, $lp)
-  $delay = [int][math]::Max(4, [math]::Floor($ms / $steps))
-  for ($i = 1; $i -le $steps; $i++) {
-    $t = $i / [double]$steps
+
+  $sw = [System.Diagnostics.Stopwatch]::StartNew()
+  $lastX = $x1; $lastY = $y1
+  while ($true) {
+    $elapsed = $sw.Elapsed.TotalMilliseconds
+    $t = $elapsed / [double]$ms
+    if ($t -ge 1.0) { break }
     $mx = [int][math]::Round($x1 + ($x2 - $x1) * $t)
     $my = [int][math]::Round($y1 + ($y2 - $y1) * $t)
-    [void][MiPhone.Native]::SendMessage($child, 0x0200, [IntPtr]1, (New-LParam $mx $my))
-    Start-Sleep -Milliseconds $delay
+    # 位置没变就不重复发消息，减少无谓的远端处理
+    if ($mx -ne $lastX -or $my -ne $lastY) {
+      [void][MiPhone.Native]::SendMessage($child, 0x0200, [IntPtr]1, (New-LParam $mx $my))
+      $lastX = $mx; $lastY = $my
+    }
+    Start-Sleep -Milliseconds 8
   }
+  [void][MiPhone.Native]::SendMessage($child, 0x0200, [IntPtr]1, (New-LParam $x2 $y2))
   [void][MiPhone.Native]::SendMessage($child, 0x0202, [IntPtr]::Zero, (New-LParam $x2 $y2))
+  $sw.Stop()
+}
+# ---- 小米互联手势组件 ----
+# 从屏幕顶端边缘往下拉：左侧 = 通知栏，右侧 = 控制中心（主人实测）。
+# 起点必须贴边（y 约 1%），否则会被面板里的卡片组件吃掉，变成普通拖动。
+# 中途不松手、匀速下滑，让系统识别成下拉手势而不是点击。
+function Invoke-PanelPull($target, [string]$side) {
+  $client = Get-ClientInfo $target.Child
+  $w = $client.W; $h = $client.H
+  if ($w -le 0 -or $h -le 0) { return $false }
+  $xPct = 25.0
+  if ($side -eq 'control') { $xPct = 75.0 }
+  $x = [int][math]::Round($w * $xPct / 100.0)
+  $y1 = [int][math]::Round($h * 0.8 / 100.0)    # 贴住顶端边缘
+  $y2 = [int][math]::Round($h * 55.0 / 100.0)   # 拉到屏幕中部，足够展开面板
+  Invoke-Swipe $target $x $y1 $x $y2 400
+  return $true
+}
+
+# 返回手势：从右边缘往左滑（主人实测可用）。参数 99% → 60%、300ms 稳定触发。
+# 用于关闭通知栏/控制中心、或 App 内返回上一页。
+function Invoke-BackGesture($target) {
+  $client = Get-ClientInfo $target.Child
+  $w = $client.W; $h = $client.H
+  if ($w -le 0 -or $h -le 0) { return $false }
+  $y = [int][math]::Round($h * 50.0 / 100.0)
+  $x1 = [int][math]::Round($w * 99.0 / 100.0)
+  $x2 = [int][math]::Round($w * 60.0 / 100.0)
+  Invoke-Swipe $target $x1 $y $x2 $y 300
+  return $true
 }
 
 # 长按：按住 ms 毫秒（手机端用于唤出上下文菜单，例如「粘贴」）
@@ -1604,6 +1646,20 @@ try {
       $result = Get-WindowInfo $target
       $result.did = $r
     }
+    'panel' {
+      # 打开系统面板：control = 控制中心，notification = 通知栏
+      $side = [string]$req.side
+      if ($side -ne 'control' -and $side -ne 'notification') { $side = 'control' }
+      $okp = Invoke-PanelPull $target $side
+      $result = Get-WindowInfo $target
+      $result.did = @{ action = 'panel'; side = $side; ok = $okp }
+    }
+    'back' {
+      # 返回手势：关闭面板或 App 内返回上一页
+      $okb = Invoke-BackGesture $target
+      $result = Get-WindowInfo $target
+      $result.did = @{ action = 'back'; ok = $okb }
+    }
     'batch' {
       $client = Get-ClientInfo $target.Child
       $log = New-Object System.Collections.ArrayList
@@ -1692,6 +1748,20 @@ try {
               [void]$log.Add(@{ op = 'clip'; read = $true; n = $ctext.Length; head = $ctext.Substring(0, [math]::Min(60, $ctext.Length)) })
             }
             Start-Sleep -Milliseconds 80
+          }
+          'panel' {
+            # 打开系统面板：control = 控制中心，notification = 通知栏
+            $side = [string]$st.side
+            if ($side -ne 'control' -and $side -ne 'notification') { $side = 'control' }
+            $okp = Invoke-PanelPull $target $side
+            [void]$log.Add(@{ op = 'panel'; side = $side; ok = $okp })
+            Start-Sleep -Milliseconds 900
+          }
+          'back' {
+            # 返回手势：关闭面板或 App 内返回上一页
+            $okb = Invoke-BackGesture $target
+            [void]$log.Add(@{ op = 'back'; ok = $okb })
+            Start-Sleep -Milliseconds 600
           }
           'wait' {
             $wm = 400

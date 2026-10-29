@@ -55,6 +55,25 @@ export const SKILL_CONTENT = `# 手机操控（dsh-phone-use）
 - 没变化时返回 \`{"ok":true,"ch":false}\`，**不带图**，几乎不花 token
 - 画面空白（投屏没建立）返回 \`{"blank":true,"state":"screen-not-projected"}\`，同样**不带图**；这时该提醒主人检查是否同一局域网，而不是等指纹解锁
 
+### phone_panel
+打开系统面板（后台手势）。**不用自己算坐标，也不用自己拼滑动。**
+
+- \`side:"control"\`（默认）→ 控制中心：快捷开关、亮度、音量、Wi-Fi/蓝牙/移动数据
+- \`side:"notification"\` → 通知栏：消息通知列表
+
+面板已打开时再调会**先返回再重新拉**，不会叠在一起。
+
+**两个面板之间不能横向滑动切换**（投屏的鼠标消息模拟做不到，横滑会被系统识别成返回手势或纵向拖动）。想从通知栏去控制中心，就 \`phone_back\` 关掉再 \`phone_panel side:"control"\` 重新拉，效果一样。
+
+### phone_back
+执行系统返回手势（从右边缘往左滑，后台）。
+
+- 关闭通知栏 / 控制中心
+- App 内返回上一页
+- 相当于按手机的返回键
+
+**关闭面板一律用它**，不要自己拼滑动路径。
+
 ### phone_do
 一次执行多步，**这是省 token 的主力**。
 \`\`\`json
@@ -64,6 +83,8 @@ export const SKILL_CONTENT = `# 手机操控（dsh-phone-use）
   {"longpress":"40,96"},
   {"text":"你好","at":"40,96"},
   {"key":"backspace","n":3},
+  {"panel":"control"},
+  {"back":true},
   {"wait":600}
 ]
 \`\`\`
@@ -71,6 +92,8 @@ export const SKILL_CONTENT = `# 手机操控（dsh-phone-use）
 - \`key\`：\`backspace|enter|esc|tab|delete|space\`，\`n\` 为次数（默认 1，按需给，不要固定 3）
 - \`text\`：输入文字，具体用法见通道章节
 - \`clip\`：\`"read"\` 读本机剪贴板（手机刚复制过来的内容），给字符串则写入；\`"@restore"\` 还原写入前的备份
+- \`panel\`：\`"control"\` 开控制中心 / \`"notification"\` 开通知栏（不用给坐标）
+- \`back\`：\`true\` 执行返回手势（关闭面板、App 内返回）
 - \`wait\`：毫秒
 
 执行完自动截一张图并按变化量决定回什么图。
