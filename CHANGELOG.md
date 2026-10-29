@@ -1,6 +1,13 @@
 # CHANGELOG
 
-## 0.3.0 — 2026-10-28
+## 0.3.1 — 2026-10-29
+
+- 清理死代码：删除从未被调用的 `Send-UnicodeInput`（含 C# `SendInput`/`INPUT` 声明）、`Invoke-Paste`/`Send-Combo`（含全局 Ctrl 注入）、`Get-BitmapStream`、`restoreclip` 动作，以及 `Invoke-PasteAt` 里已被否掉的“逐个试点击菜单项”逻辑。
+- 删除一次性实验脚本：`scripts/probe-text.ps1`、`scripts/mi-phone-text-probe.ps1`、`scripts/ocr-probe.ps1`（结论见 DEVLOG D7/D11b）。
+- 修复 `openmenu` 动作没有把待粘贴文字传进去的问题。
+- 中文输入统一为：`openmenu` 出菜单图 → 看图算坐标 → 单次 `tap` → `inserted` 校验 → `clip:"@restore"`。
+
+## 0.3.0 — 2026-10-28 （unicode 诊断入口已在 0.3.1 移除）
 
 - **修复中文输入**：长按期间补 MOVE 心跳（只 DOWN→睡→UP 会被当成普通点击，菜单不弹）。
 - 粘贴菜单改为**自动定位**：长按前后差分找弹出浮层，取最宽横向条带当菜单本体，点其中心；不再依赖写死的 `11,93`。

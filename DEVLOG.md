@@ -23,6 +23,7 @@
 | D9 | 剪贴板备份与还原 | `@restore` 协议 |
 | D10 | 回归清单 | 改完必须跑什么 |
 | D11 | 待办与已知缺口 | 还没做完的事 |
+| D11b | 0.3.1 清理记录 | 删了什么、为什么删 |
 | D12 | 变更记录 | 按版本记 |
 
 ## 1.2 长期规则（违反会直接踩回坑里）
@@ -113,7 +114,7 @@
 
 ## D7 OCR 尝试结论
 
-想用 OCR 直接把菜单上的「粘贴」读出来，尝试用 `Windows.Media.Ocr`（WinRT）。在 Windows PowerShell 5.1 里 `New-Object Windows.Globalization.Language` 直接报「找不到类型」，WinRT 类型没被正确加载，脚本 `scripts/ocr-probe.ps1` 目前是**跑不通的半成品**，留作以后有需要再攻。
+想用 OCR 直接把菜单上的「粘贴」读出来，尝试用 `Windows.Media.Ocr`（WinRT）。在 Windows PowerShell 5.1 里 `New-Object Windows.Globalization.Language` 直接报「找不到类型」，WinRT 类型没被正确加载，这条路**没跑通**。当时的 `scripts/ocr-probe.ps1` 已在 0.3.1 清理里删除（git 历史可查）。要再攻，先解决 PS 5.1 加载 WinRT 的问题，或换 PowerShell 7 环境验证。
 
 另外历史上试过对投屏画面做 Windows OCR：16px 中文字形识别全是乱码，放大 2x/3x、灰度增强都无改善，所以技能里明确写了「没有 OCR」。菜单文字虽然更大，但这条链路没有被验证过，不能当既有能力用。
 
@@ -140,16 +141,30 @@
 
 ## D11 待办与已知缺口
 
-- `server.mjs` 新增的 `openmenu` / `text` 摘要参数需要**重启 DSH** 才会在会话里出现；`mi-phone.ps1` 侧的 `openmenu`、`@restore`、`inserted` 已经即时生效。
-- `scripts/ocr-probe.ps1` 未跑通（D7）。
-- `phone_do` 旧的 `text` 中文路径在没有 `menu` 时现在只弹菜单、不点击，需要配套“看图再点”（这是刻意的，见 R3）。
+- `server.mjs` 的 `openmenu` 参数需要**重启 DSH** 才会在会话里出现；`mi-phone.ps1` 侧的 `openmenu`、`@restore`、`inserted` 即时生效。
+- `phone_do` 的 `text` 中文路径在没有 `menu` 时只弹菜单、不点击，需要配套“看图再点”（刻意的，见 R3）。
 - 多设备 / 多窗口未支持。
-- 没有 git 仓库；日志文件已就绪，是否 `git init` 待定（不配置 remote 就不会推送）。
+- 剪贴板备份只有一份，连续多次写入可能把中间态当原件（见 D9），需要时改成带时间戳的多份备份。
+
+## D11b 0.3.1 清理记录（删了什么、为什么）
+
+| 删掉的东西 | 原因 |
+|---|---|
+| `Send-UnicodeInput` + `phone_do.unicode` 参数 + C# `SendInput`/`INPUT`/`KEYBDINPUT` | 实测注入的 Unicode 打不进手机，属于无效诊断入口（D6） |
+| `Invoke-Paste` 与 `Send-Combo`（含 `ctrlstate` 全局 Ctrl 注入） | 没有任何工具调用它；`ctrlstate` 还会和用户物理键盘抢状态 |
+| `Get-BitmapStream` | 从未被调用 |
+| `Invoke-PasteAt` 里“按比例逐个试点击”的整段逻辑 | 用户明确否决（R4），且 `Invoke-Text` 已改为只走 `openmenu` |
+| `scripts/probe-text.ps1`、`scripts/mi-phone-text-probe.ps1` | 当时验证 WM_CHAR/WM_IME_CHAR 的一次性实验，功能重复 |
+| `scripts/ocr-probe.ps1` | WinRT OCR 没跑通（D7），保留会误导 |
+| `restoreclip` 动作 | 与 `clip:"@restore"` 重复，只留一条路径 |
+
+清理后行数：`mi-phone.ps1` 1230 → 约 1040 行。
 
 ## D12 变更记录
 
 | 版本 | 内容 |
 |---|---|
+| 0.3.1 | 清理死代码（见 D11b）；`openmenu` 传值修复；文档同步 |
 | 0.3.0 | 长按补 MOVE 心跳；菜单差分定位；`inserted` 校验；`openmenu` 两段式输入；`@restore` 剪贴板还原；中文不再盲点菜单 |
 | 0.2.0 | 改 MCP stdio 挂载；新增 `verify`；三档权限；帧文件复用 |
 | 0.1.0 | 首版：窗口定位、截图、点击/滑动/长按、ASCII 输入、剪贴板粘贴 |

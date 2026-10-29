@@ -18,7 +18,10 @@
     {"action":"capture","out":"...png","prev":"...png","region":[x,y,w,h],"maxWidth":0}
     {"action":"tap","x":50,"y":88}            # 百分比
     {"action":"swipe","from":[50,95],"to":[50,40],"ms":300}
-    {"action":"text","value":"你好 abc"}
+    {"action":"longpress","x":40,"y":96,"ms":900}
+    {"action":"text","value":"hello","at":"40,96","menu":"38,18"}   # ASCII 直接打，含中文时必须给 menu（粘贴坐标）
+    {"action":"openmenu","at":"40,96","value":"要粘贴的文字"}        # 只弹菜单 + 出图，不点任何菜单项
+    {"action":"clip","value":"..."}         # 写剪贴板；value 为 "@restore" 时还原
     {"action":"key","name":"backspace","n":3}
     {"action":"restore"}
 #>
@@ -48,14 +51,6 @@ namespace MiPhone
         public delegate bool EnumProc(IntPtr hWnd, IntPtr lParam);
 
         [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
-        [DllImport("user32.dll", SetLastError = true)] public static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
-        [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-        [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
-
-        [StructLayout(LayoutKind.Sequential)] public struct INPUT { public uint type; public InputUnion U; }
-        [StructLayout(LayoutKind.Explicit)] public struct InputUnion { [FieldOffset(0)] public KEYBDINPUT ki; }
-        [StructLayout(LayoutKind.Sequential)] public struct KEYBDINPUT { public ushort wVk; public ushort wScan; public uint dwFlags; public uint time; public UIntPtr dwExtraInfo; }
-        public const uint INPUT_KEYBOARD = 1, KEYEVENTF_UNICODE = 0x0004, KEYEVENTF_KEYUP = 0x0002;
 
         [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr l);
         [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr h, EnumProc cb, IntPtr l);
@@ -322,13 +317,6 @@ $VT = @{
 # ---------------------------------------------------------------------------
 # 基础
 # ---------------------------------------------------------------------------
-function Get-BitmapStream($bitmap, $format) {
-  $ms = New-Object System.IO.MemoryStream
-  $bitmap.Save($ms, $format)
-  $ms.Position = 0
-  return $ms
-}
-
 function Resolve-WindowSpec($win) {
   $spec = @{
     Titles      = $VT.WindowTitles
@@ -657,193 +645,47 @@ function Send-AsciiChar([IntPtr]$child, [char]$ch) {
   if ($shift) { [void][MiPhone.Native]::PostMessage($child, 0x0101, [IntPtr]0x10, $shiftUp) }
 }
 
-function Send-Combo([IntPtr]$child, [int[]]$vks, [int]$gapMs) {
-  if ($gapMs -lt 5) { $gapMs = 15 }
-  foreach ($vk in $vks) {
-    $scan = [MiPhone.Native]::MapVirtualKey([uint32]$vk, 0) -band 0xFF
-    [void][MiPhone.Native]::PostMessage($child, 0x0100, [IntPtr]$vk, [IntPtr](1 -bor ($scan -shl 16)))
-    Start-Sleep -Milliseconds $gapMs
-  }
-  for ($i = $vks.Count - 1; $i -ge 0; $i--) {
-    $vk = $vks[$i]
-    $scan = [MiPhone.Native]::MapVirtualKey([uint32]$vk, 0) -band 0xFF
-    [void][MiPhone.Native]::PostMessage($child, 0x0101, [IntPtr]$vk, [IntPtr]((1 -bor ($scan -shl 16)) -bor 0xC0000000))
-    Start-Sleep -Milliseconds $gapMs
-  }
-}
-
-# 长按唤出菜单 → 点「粘贴」。全程纯鼠标消息，不碰全局键盘状态，不与用户冲突。
-# 菜单坐标不再写死：长按前后各截一张，用差分找到新弹出的浮层，点它中心。
-# 传了 menu 就仍按给定坐标点（老行为，兼容特殊 App）。
+# 已知「粘贴」坐标时的一步式粘贴：写剪贴板 → 长按输入框 → 点给定坐标 → 校验 → 还原剪贴板。
+# 坐标哪来的？由 openmenu 出图、调用方看图算出来的（菜单样式每个 App 都不一样，不能写死）。
 function Invoke-PasteAt($target, [string]$text, [string]$at, [string]$menu, [int]$holdMs) {
   $client = Get-ClientInfo $target.Child
   $ptA = ConvertTo-Point $at $client
-  $ptM = $null
-  if ($menu) { $ptM = ConvertTo-Point $menu $client }
+  $ptM = ConvertTo-Point $menu $client
   if ($holdMs -le 0) { $holdMs = 800 }
   $shotDir = Join-Path $env:TEMP 'dsh-mi-phone-use'
   if (-not (Test-Path $shotDir)) { New-Item -ItemType Directory -Path $shotDir -Force | Out-Null }
   $preShot = Join-Path $shotDir 'paste-pre.png'
-  $postShot = Join-Path $shotDir 'paste-post.png'
+  $afterShot = Join-Path $shotDir 'paste-after.png'
 
   $prevText = $null
   $hadPrev = $false
-  try {
-    $prevText = Get-Clipboard -Raw -ErrorAction Stop
-    $hadPrev = $true
-  } catch { $hadPrev = $false }
+  try { $prevText = Get-Clipboard -Raw -ErrorAction Stop; $hadPrev = $true } catch { $hadPrev = $false }
 
   Set-Clipboard -Value $text -ErrorAction Stop
-  Start-Sleep -Milliseconds 1500         # 等互联把剪贴板同步到手机（太快会只有「AI写作/常用语」，没有「粘贴」）
+  Start-Sleep -Milliseconds 2000        # 等互联同步剪贴板（实测可能要 3s+，见 DEVLOG D4b）
 
-  $menuHit = 'given'
-  $box = $null
-  $probeLog = New-Object System.Collections.ArrayList
-  $inserted = $null
-  $afterShot = Join-Path $shotDir 'paste-after.png'
+  try { Invoke-Capture $target $preShot $null $null 0 | Out-Null } catch { }
+  Invoke-LongPress $target $ptA[0] $ptA[1] $holdMs
+  Start-Sleep -Milliseconds 700
+  Invoke-Tap $target $ptM[0] $ptM[1]
+  Start-Sleep -Milliseconds 800
 
-  # 输入框那条横带（校验「字有没有真的进去」用）
+  # 校验：输入框那条横带应该出现新字（比较基准是长按前那张，那时菜单还没出来）
   $rh = [int][math]::Ceiling($client.H * 0.10)
   $ry = [int][math]::Max(0, [math]::Min($client.H - $rh, $ptA[1] - [int]($rh / 2)))
   $fieldRect = @(2, [int]($ry * 100.0 / $client.H), 96, [int]($rh * 100.0 / $client.H))
-
-  if (-not $ptM) {
-    try { Invoke-Capture $target $preShot $null $null 0 | Out-Null } catch { }
-    Invoke-LongPress $target $ptA[0] $ptA[1] $holdMs
-    # 菜单是带动画弹出来的：多等几轮再抓；抓到的浮层太小就继续等（最多 3 轮）
-    for ($r = 1; $r -le 3; $r++) {
-      Start-Sleep -Milliseconds 700
-      try {
-        Invoke-Capture $target $postShot $null $null 0 | Out-Null
-        $probe = Get-PopupBox $preShot $postShot $client
-        if ($probe -and $probe.w -ge 100 -and $probe.h -ge 40) { $box = $probe; break }
-        if ($probe -and -not $box) { $box = $probe }
-      } catch { }
-    }
-
-    if ($box) {
-      $menuHit = 'auto'
-      # 不同 App / 不同页面的菜单项数、顺序、宽度都不一样，「粘贴」不一定在正中。
-      # 没办法读字（投屏中文 OCR 不可用），所以改成「按比例试 → 立刻校验 → 不对且菜单还在就试下一个」。
-      $cands = @(0.5, 0.36, 0.64, 0.22, 0.78)
-      $boxRect = @(
-        [int]($box.x * 100.0 / $client.W),
-        [int]($box.y * 100.0 / $client.H),
-        [int]($box.w * 100.0 / $client.W),
-        [int]($box.h * 100.0 / $client.H)
-      )
-      foreach ($f in $cands) {
-        $cx = [int]($box.x + $box.w * $f)
-        $cy = [int]($box.y + $box.h / 2)
-        Invoke-Tap $target $cx $cy
-        Start-Sleep -Milliseconds 800
-        try { Invoke-Capture $target $afterShot $null $null 0 | Out-Null } catch { }
-        $inserted = Test-RegionChanged $preShot $afterShot $fieldRect $client
-        [void]$probeLog.Add(@{ at = "$f"; inserted = $inserted })
-        $ptM = @($cx, $cy)
-        if ($inserted -eq $true) { break }
-        # 没粘进去：菜单还在就继续试下一项；菜单没了说明点到别的功能，按一次返回撤掉后停手
-        $menuStill = Test-RegionChanged $postShot $afterShot $boxRect $client
-        if ($menuStill -ne $true) {
-          try { Invoke-Key $target 'esc' 1 | Out-Null } catch { }
-          Start-Sleep -Milliseconds 600
-          break
-        }
-      }
-    } else {
-      # 完全没抓到浮层：按输入框位置退化成「上方还是下方」的经验值，点完同样校验
-      $menuHit = 'guess'
-      $guessY = if ($ptA[1] -gt ($client.H / 2)) { $ptA[1] - [int]($client.H * 0.10) } else { $ptA[1] + [int]($client.H * 0.10) }
-      $ptM = @($ptA[0], $guessY)
-      Invoke-Tap $target $ptM[0] $ptM[1]
-      Start-Sleep -Milliseconds 800
-      try { Invoke-Capture $target $afterShot $null $null 0 | Out-Null } catch { }
-      $inserted = Test-RegionChanged $preShot $afterShot $fieldRect $client
-    }
-  } else {
-    Invoke-LongPress $target $ptA[0] $ptA[1] $holdMs
-    Start-Sleep -Milliseconds 700
-    Invoke-Tap $target $ptM[0] $ptM[1]
-    Start-Sleep -Milliseconds 800
-    try {
-      Invoke-Capture $target $afterShot $null $null 0 | Out-Null
-      $inserted = Test-RegionChanged $preShot $afterShot $fieldRect $client
-    } catch { $inserted = $null }
-  }
-
-  $restored = 'none'
-  if ($hadPrev) {
-    try { Set-Clipboard -Value $prevText -ErrorAction Stop; $restored = $true }
-    catch { $restored = $false }
-  }
-  $boxInfo = $null
-  if ($box) { $boxInfo = @{ x = [int]$box.x; y = [int]$box.y; w = [int]$box.w; h = [int]$box.h; banded = [bool]$box.banded } }
-  return @{ mode = 'paste-menu'; n = $text.Length; clip = $restored; at = $at; menu = $menuHit; menuAt = "$([int]($ptM[0] * 100.0 / $client.W)),$([int]($ptM[1] * 100.0 / $client.H))"; inserted = $inserted; box = $boxInfo; probes = @($probeLog) }
-}
-
-# 通过共用剪贴板把文本送进手机：写剪贴板 -> 等互联同步 -> 触发粘贴 -> 还原剪贴板
-# 注意：ctrlstate 会注入全局 Ctrl 按键状态，可能与用户的物理键盘冲突，
-#       **默认不使用**；只有用户明确同意时才走这条。
-function Send-UnicodeInput([string]$text) {
-  if ([string]::IsNullOrEmpty($text)) { return @{ sent = 0; mode = 'unicode-sendinput' } }
-  $inputs = New-Object 'MiPhone.Native+INPUT[]' ($text.Length * 2)
-  $i = 0
-  foreach ($u in $text.ToCharArray()) {
-    $inputs[$i].type = [MiPhone.Native]::INPUT_KEYBOARD
-    $inputs[$i].U.ki = New-Object 'MiPhone.Native+KEYBDINPUT'
-    $inputs[$i].U.ki.wScan = [uint16][int]$u
-    $inputs[$i].U.ki.dwFlags = [MiPhone.Native]::KEYEVENTF_UNICODE
-    $i++
-    $inputs[$i].type = [MiPhone.Native]::INPUT_KEYBOARD
-    $inputs[$i].U.ki = New-Object 'MiPhone.Native+KEYBDINPUT'
-    $inputs[$i].U.ki.wScan = [uint16][int]$u
-    $inputs[$i].U.ki.dwFlags = [MiPhone.Native]::KEYEVENTF_UNICODE -bor [MiPhone.Native]::KEYEVENTF_KEYUP
-    $i++
-  }
-  $sent = [MiPhone.Native]::SendInput([uint32]$inputs.Length, $inputs, [Runtime.InteropServices.Marshal]::SizeOf([type]'MiPhone.Native+INPUT'))
-  if ($sent -ne $inputs.Length) { throw "SendInput Unicode failed: $sent/$($inputs.Length)" }
-  return @{ mode = 'unicode-sendinput'; sent = $text.Length }
-}
-
-function Invoke-Paste($target, [string]$text, [string]$method) {
-  $child = $target.Child
-  $prevText = $null
-  $hadPrev = $false
+  $inserted = $null
   try {
-    $prevText = Get-Clipboard -Raw -ErrorAction Stop
-    $hadPrev = $true
-  } catch { $hadPrev = $false }
-
-  Set-Clipboard -Value $text -ErrorAction Stop
-  # 给互联同步剪贴板的时间：全局按键路径可以短，WM_PASTE 需要在同步之后才有效
-  if ($method -eq 'wmpaste') { Start-Sleep -Milliseconds 900 } else { Start-Sleep -Milliseconds 400 }
-
-  if ($method -eq 'wmpaste') {
-    [void][MiPhone.Native]::SendMessage($child, 0x0302, [IntPtr]::Zero, [IntPtr]::Zero)
-  } elseif ($method -eq 'shiftinsert') {
-    Send-Combo $child @(0x10, 0x2D) 20
-  } elseif ($method -eq 'ctrlstate') {
-    # 投屏控件转发按键时会读真实修饰键状态（GetKeyState），
-    # 所以必须把 Ctrl 真的按下去（只注入按键，不动鼠标、不切焦点）。
-    [MiPhone.Native]::keybd_event(0x11, 0, 0, [UIntPtr]::Zero)   # Ctrl down
-    try {
-      Start-Sleep -Milliseconds 30
-      Send-Combo $child @(0x56) 15                               # 只发 V
-      Start-Sleep -Milliseconds 60
-    } finally {
-      [MiPhone.Native]::keybd_event(0x11, 0, 2, [UIntPtr]::Zero) # Ctrl up
-    }
-  } else {
-    Send-Combo $child @(0x11, 0x56) 20    # Ctrl+V
-  }
-  if ($method -eq 'wmpaste') { Start-Sleep -Milliseconds 700 } else { Start-Sleep -Milliseconds 350 }
+    Invoke-Capture $target $afterShot $null $null 0 | Out-Null
+    $inserted = Test-RegionChanged $preShot $afterShot $fieldRect $client
+  } catch { $inserted = $null }
 
   $restored = 'none'
   if ($hadPrev) {
     try { Set-Clipboard -Value $prevText -ErrorAction Stop; $restored = $true }
     catch { $restored = $false }
   }
-  return @{ mode = "paste-$method"; n = $text.Length; clip = $restored }
+  return @{ mode = 'paste-menu'; n = $text.Length; clip = $restored; at = $at; menu = 'given'; menuAt = $menu; inserted = $inserted }
 }
 
 function Invoke-Text($target, [string]$text, [string]$at, [string]$menu) {
@@ -860,7 +702,7 @@ function Invoke-Text($target, [string]$text, [string]$at, [string]$menu) {
     if (-not $menu) {
       # 菜单项的个数、顺序、位置每个 App 都不一样（见过「AI写作/粘贴/常用语」，也见过「粘贴/常用语」）。
       # 不猜、不逐个试：只把菜单弹出来并回一张菜单截图，等人（或模型）看一眼「粘贴」在哪，再带 menu 点。
-      return (Invoke-OpenMenu $target $at 800)
+      return (Invoke-OpenMenu $target $at 800 $text)
     }
     return (Invoke-PasteAt $target $text $at $menu 800)
   }
@@ -873,7 +715,7 @@ function Invoke-Text($target, [string]$text, [string]$at, [string]$menu) {
 }
 
 # 只弹菜单，不点任何东西：写剪贴板 -> 等同步 -> 长按 -> 找出菜单框 -> 把它裁出来存成图。
-# 调用方看这张图确认「粘贴」在哪，再用 {"tap":"x,y"} 点；点完用 {"restoreclip":true} 还原剪贴板。
+# 调用方看这张图确认「粘贴」在哪，再用 {"tap":"x,y"} 点；点完用 {"clip":"@restore"} 还原剪贴板。
 function Invoke-OpenMenu($target, [string]$at, [int]$holdMs, [string]$text) {
   $client = Get-ClientInfo $target.Child
   $ptA = ConvertTo-Point $at $client
@@ -1025,18 +867,6 @@ try {
       $result = Get-WindowInfo $target
       $result.did = $r
     }
-    'paste' {
-      $method = 'ctrlv'
-      if ($null -ne $req.method -and [string]$req.method) { $method = [string]$req.method }
-      $r = Invoke-Paste $target ([string]$req.value) $method
-      $result = Get-WindowInfo $target
-      $result.did = $r
-    }
-    'unicode' {
-      $r = Send-UnicodeInput ([string]$req.value)
-      $result = Get-WindowInfo $target
-      $result.did = $r
-    }
     'longpress' {
       $client = Get-ClientInfo $target.Child
       $px = [int][math]::Round($client.W * ([double]$req.x) / 100.0)
@@ -1059,24 +889,11 @@ try {
       }
     }
     'openmenu' {
-      $client = Get-ClientInfo $target.Child
-      $hold = 800
+      $hold = 900
       if ($null -ne $req.ms) { $hold = [int]$req.ms }
-      $r = Invoke-OpenMenu $target ([string]$req.at) $hold
+      $r = Invoke-OpenMenu $target ([string]$req.at) $hold ([string]$req.value)
       $result = Get-WindowInfo $target
       $result.did = $r
-    }
-    'restoreclip' {
-      $dir = Join-Path $env:TEMP 'dsh-mi-phone-use'
-      $bak = Join-Path $dir 'clip-backup.txt'
-      if (Test-Path $bak) {
-        $prev = [IO.File]::ReadAllText($bak, [System.Text.UTF8Encoding]::new($false))
-        Set-Clipboard -Value $prev -ErrorAction Stop
-        Remove-Item $bak -Force -ErrorAction SilentlyContinue
-        $result = @{ ok = $true; clip = 'restored'; n = $prev.Length }
-      } else {
-        $result = @{ ok = $true; clip = 'nothing-to-restore' }
-      }
     }
     'key' {
       $n = 1

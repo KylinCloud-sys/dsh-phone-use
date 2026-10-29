@@ -190,7 +190,6 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        unicode: { type: 'string', description: '仅在用户明确同意前台键盘测试时使用；通过真实 Windows Unicode 键盘事件注入当前焦点，不发送回车。' },
         openmenu: { type: 'string', description: '中文输入第一步：输入框位置 "x,y"。写剪贴板→长按→把弹出的菜单裁成图片返回（不点击任何菜单项）。看着图确认「粘贴」在哪，再用 tap 点它，最后 clip:"@restore" 还原剪贴板。' },
         text: { type: 'string', description: '配合 openmenu 使用：要粘贴的中文内容。' },
         steps: {
@@ -205,12 +204,6 @@ const TOOLS = [
       additionalProperties: false,
     },
     async handler(args = {}) {
-      if (typeof args.unicode === 'string' && args.unicode.length > 0) {
-        const blocked = gate([{ op: 'unicode', danger: true }], args.confirm === true)
-        if (blocked) return { text: { ok: false, ...blocked, hint: '前台真实键盘输入必须先取得用户明确同意，再带 confirm:true' } }
-        const r = await run({ action: 'unicode', value: args.unicode }, 30000)
-        return { text: r.ok === false ? { ok: false, error: r.error } : { ok: true, ...r.did } }
-      }
       if (typeof args.openmenu === 'string' && args.openmenu.length > 0) {
         const r = await run({ action: 'openmenu', at: String(args.openmenu), text: args.text ? String(args.text) : '', ms: 900 }, 45000)
         if (r.ok === false) return { text: { ok: false, error: r.error } }
