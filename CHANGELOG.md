@@ -1,5 +1,16 @@
-# CHANGELOG
+﻿# CHANGELOG
 
+## 0.6.0 — 2026-10-30
+
+**新增三档权限下拉开关，位于输入框右下角（模型选择旁边）。**
+
+- **`client/permission-switch.js`**：浏览器端 UI 模块，注册到 `conversation.input.right` 插槽。
+- 三档：完全权限 / 自动确认 / 每次询问，按会话独立保存在 `localStorage`（键含 sessionId）。
+- 交互复用官方 primitives：`Menu` + `IconChevronDownOutlineRegular`，向上弹出，和原版「完全权限」同款行为。
+- `package.json` 新增 `dsh.client`（`platform:"web"` + 包名 inject）与 `exports`。
+  **必须保留 `"./package.json": "./package.json"`**——缺它会让 DSH 扫描插件时抛
+  `ERR_PACKAGE_PATH_NOT_EXPORTED`，整个 web boot 崩溃。
+- 浏览器模块的导出方式是 `return { apply, inject }`，**不是** `exports.apply = ...`。
 ## 0.5.0 — 2026-10-29
 
 **新增两个高层手势工具，AI 不用再自己拼滑动路径。**

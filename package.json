@@ -1,51 +1,65 @@
 {
-    "name":  "dsh-phone-use",
-    "version": "0.5.0",
-    "private":  true,
-    "description":  "DeepSeek Harness plugin: background phone control. Currently Xiaomi screen-share; adb and other brands planned.",
-    "type":  "module",
-    "main":  "index.js",
-    "files":  [
-                  "index.js",
-                  "cordis.patch.yml",
-                  "scripts/",
-                  "mcp/",
-                  "skill-content.mjs",
-                  "cli.mjs",
-                  "install.ps1",
-                  "README.md",
-                  "config.json",
-                  "CHANGELOG.md",
-                  "LICENSE"
-              ],
-    "dsh":  {
-                "bundle":  {
-                               "patch":  "./cordis.patch.yml"
-                           }
-            },
-    "engines":  {
-                    "node":  "\u003e=18"
-                },
-    "os":  [
-               "win32"
-           ],
-    "keywords":  [
-                     "dsh",
-                     "dsh-plugin",
-                     "deepseek-harness",
-                     "phone",
-                     "xiaomi",
-                     "adb",
-                     "computer-use",
-                     "mirror"
-                 ],
-    "peerDependencies":  {
-                             "@deepseek-ai/dsh-mcp-client":  "\u003e=0.1.0"
-                         },
-    "peerDependenciesMeta":  {
-                                 "@deepseek-ai/dsh-mcp-client":  {
-                                                                     "optional":  true
-                                                                 }
-                             },
-    "license":  "MIT"
+  "name": "dsh-phone-use",
+  "version": "0.6.0",
+  "private": true,
+  "description": "DeepSeek Harness plugin: background phone control. Currently Xiaomi screen-share; adb and other brands planned.",
+  "type": "module",
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "scripts/",
+    "mcp/",
+    "skill-content.mjs",
+    "cli.mjs",
+    "install.ps1",
+    "README.md",
+    "config.json",
+    "CHANGELOG.md",
+    "LICENSE",
+    "client/"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-primitives"
+      ]
+    }
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "win32"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "phone",
+    "xiaomi",
+    "adb",
+    "computer-use",
+    "mirror"
+  ],
+  "peerDependencies": {
+    "@deepseek-ai/dsh-mcp-client": ">=0.1.0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-mcp-client": {
+      "optional": true
+    }
+  },
+  "license": "MIT",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client/permission-switch.js",
+    "./package.json": "./package.json",
+    "./*": "./*"
+  }
 }
