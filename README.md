@@ -1,4 +1,4 @@
-# dsh-phone-use
+﻿# dsh-phone-use
 
 DeepSeek Harness 插件：在**后台**操控手机——截图、点击、滑动、输入。
 
@@ -51,7 +51,7 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 
 然后**重启 DSH 并新建一个会话**（已存在的会话不会刷新工具清单）。
 
-装好应看到四个工具 `mcp__miphone__phone_wake` / `phone_info` / `phone_see` / `phone_do` 和技能 `mi-phone`。
+装好应看到六个工具 `mcp__phone__phone_wake` / `phone_info` / `phone_see` / `phone_panel` / `phone_back` / `phone_do`，技能 `phone`，以及输入框右下角的「手机权限」三档下拉。
 
 自检：
 
