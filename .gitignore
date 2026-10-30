@@ -17,3 +17,6 @@ last.crop.png
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# 开发日志只留本地，绝不提交/推送（见 DEVLOG R10）
+DEVLOG.md
