@@ -1001,10 +1001,18 @@ function Test-OcrAvailable {
 }
 
 # 返回给调用方的提示：没装中文 OCR 时说明会受限。
+# 缺 OCR 语言包时返回结构化缺失信息给 AI（只说缺什么，处置由 AI 决定并转告主人）。
 function Get-OcrHint {
   if (Test-OcrAvailable) { return $null }
-  return '未检测到简体中文 OCR 语言包，插件无法识别投屏页面文字（连接页/失败页/解锁页），自动唤起功能会受限。安装方式：Windows 设置 → 时间和语言 → 语言和区域 → 添加语言 → 中文(简体) → 勾选「光学字符识别」。'
+  return @{
+    code = 'ocr-language-missing'
+    missing = '简体中文 OCR 语言包（zh-Hans-CN）'
+    impact = '无法读取投屏画面上的文字，因此分不清「连接中 / 待解锁 / 连接失败」这三种占位页'
+    degraded = @('phone_wake 的页面判定', 'phone_panel 后无法确认面板类型')
+    where = 'Windows 设置 → 时间和语言 → 语言和区域 → 添加语言 → 中文(简体) → 勾选「光学字符识别」'
+  }
 }
+
 function Get-SurfaceOcrText([string]$imagePath) {
   if (-not $imagePath -or -not (Test-Path -LiteralPath $imagePath)) { return $null }
   try {
@@ -1462,6 +1470,8 @@ function Invoke-Wake($spec, $req) {
             $info.aspect = [math]::Round([double]$client.W / [double]$client.H, 3)
             $info.unlockRequired = $true
             $info.unlockState = 'locked'
+            $info.ocrAvailable = (Test-OcrAvailable)
+            $info.ocrHint = (Get-OcrHint)
             $info.ok = $true
             $info.evidence = $evidence
             $info.userPrompt = '小米互联已连上，手机处于锁屏状态。请主人在手机上手动完成指纹解锁；解锁完成并确认后再继续操作。插件不会代为解锁。'

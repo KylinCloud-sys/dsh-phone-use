@@ -184,6 +184,7 @@ const TOOLS = [
             evidence: r.evidence,
             ocrAvailable: r.ocrAvailable,
             ocrHint: r.ocrHint,
+            ...(r.ocrAvailable === false ? { ocrMissing: r.ocrHint } : {}),
             error: r.error,
             userActionRequired: r.userActionRequired,
           },
@@ -205,6 +206,7 @@ const TOOLS = [
           evidence: r.evidence,
           ocrAvailable: r.ocrAvailable,
           ocrHint: r.ocrHint,
+          ...(r.ocrAvailable === false ? { ocrMissing: r.ocrHint } : {}),
           userPrompt: r.userPrompt,
         },
       }

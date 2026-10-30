@@ -1,4 +1,4 @@
-// 技能正文（index.js 与 mcp/dsh-plugin.mjs 共用）
+﻿// 技能正文（index.js 与 mcp/dsh-plugin.mjs 共用）
 export const SKILL_CONTENT = `# 手机操控（dsh-phone-use）
 
 > 工具名可能是 phone_info 或 mcp__phone__phone_info（取决于挂载方式），按实际可用名调用。
@@ -42,7 +42,15 @@ export const SKILL_CONTENT = `# 手机操控（dsh-phone-use）
 | \`client-not-found\` / \`launch-failed\` | 客户端缺失或启动失败 | 请主人安装/手动打开一次 |
 
 附加字段：
-- \`ocrAvailable\` / \`ocrHint\`：\`false\` 表示没装简体中文 OCR 语言包，页面状态判断会退化；\`ocrHint\` 里有安装指引，可转告主人。
+- \`ocrAvailable\`：\`false\` 表示这台机器**没装简体中文 OCR 语言包**。
+  此时 \`ocrMissing\` 会给出结构化的缺失说明，包含：
+  - \`missing\`：缺什么
+  - \`impact\`：会导致什么后果（分不清连接中/待解锁/连接失败）
+  - \`degraded\`：哪些功能受影响
+  - \`where\`：去哪儿装
+
+  **看到 \`ocrAvailable:false\` 时，要把 \`ocrMissing\` 的内容如实转告主人**——说明缺什么、为什么某些判断会不准、去哪儿补。
+  插件只报告缺什么，具体怎么处置由你判断并向主人说明。
 - \`aspect\`：画面宽高比（已做横竖屏归一化），仅用于排查，不用来判断状态。
 
 ### phone_info
