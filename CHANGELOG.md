@@ -1,5 +1,17 @@
 ﻿# CHANGELOG
 
+## 0.6.1 — 2026-11-01
+
+**安装方式改为复制到 DSH 目录，不再用软链接。**
+
+- **常规安装**：把插件文件复制到 `~/.dsh/profiles/<profile>/node_modules/dsh-phone-use`，
+  `dependencies` 里记版本号（不再是 `link:`）。**装完源目录可删可移**。
+- **保留开发模式**：加 `-Link` 参数仍可建链接（用 Junction 而非 SymbolicLink，不需要管理员权限）。
+- **新增 `-Uninstall`**：清除 `dependencies` / `bundles` 登记项并删除安装目录。
+- **修掉删除 Junction 报 NullReferenceException**：改用 `[IO.Directory]::Delete` 只删链接本身，
+  避免 `Remove-Item -Recurse` 追进去删源文件。
+- **写入前校验 JSON**：生成的 profile `package.json` 必须先 `ConvertFrom-Json` 通过才落盘，防止写坏配置。
+- README 补上安装参数表和复制式安装说明。
 ## 0.6.0 — 2026-10-30
 
 **新增三档权限下拉开关，位于输入框右下角（模型选择旁边）。**

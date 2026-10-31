@@ -49,6 +49,19 @@ DeepSeek Harness 插件：在**后台**操控手机——截图、点击、滑�
 powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 
+安装脚本会把插件文件**复制**到 DSH profile 的 `node_modules` 目录下，并登记到
+`package.json` 的 `dependencies` + `dsh.profile.bundles`。**复制式安装**：装完源目录可以删掉或移动，不影响使用。
+
+常用参数：
+
+| 参数 | 作用 |
+|---|---|
+| （无） | 常规安装：复制到 profile |
+| `-Profile web` | 装到指定 profile，默认自动选 `desktop` |
+| `-Link` | 开发模式：改用软链接，改源码即时生效 |
+| `-Uninstall` | 卸载：清除登记项和安装目录 |
+| `-SkipInstall` | 跳过 pnpm install |
+
 然后**重启 DSH 并新建一个会话**（已存在的会话不会刷新工具清单）。
 
 装好应看到六个工具 `mcp__phone__phone_wake` / `phone_info` / `phone_see` / `phone_panel` / `phone_back` / `phone_do`，技能 `phone`，以及输入框右下角的「手机权限」三档下拉。
