@@ -530,7 +530,6 @@ function Invoke-Capture($target, [string]$out, [string]$prev, $region, [int]$max
       # 或整屏过暗（窗口刚创建、内容未渲染的黑屏）。
       # 注意：这一条只能判"是不是占位页"，判不出是哪一页——三页数值几乎一样。
       $darkRatio = $darkCount / [double]$n
-      $result.blank = (($dominant -ge 0.94) -or ($darkRatio -ge 0.60))
       $result.dark = [math]::Round($darkRatio, 4)
     }
   } catch { }
@@ -560,18 +559,9 @@ function Invoke-Capture($target, [string]$out, [string]$prev, $region, [int]$max
     $crop.Save($out, [System.Drawing.Imaging.ImageFormat]::Png)
     $result.path = $out
 
-    # OCR：只读占位页上的文字，用来在"静止的占位页"里区分待解锁 / 连接失败。
-    # 真实画面（桌面/视频/App）OCR 出来是噪声，不会命中关键词，因此不会误判。
-    # 注意：OCR 只在需要时（占位页）才跑，真实画面不浪费这一秒。
-    if ($result.blank) {
-      $ocr = Get-SurfaceOcrText $out
-      if ($ocr) {
-        $result.ocr = $ocr
-        $result.ocrConnecting = [bool]($ocr -match '正在连接' -or $ocr -match '连接中')
-        $result.ocrUnlock     = [bool]($ocr -match '手机解锁' -or $ocr -match '请在手机端解锁' -or $ocr -match '请在手机上解锁' -or $ocr -match '解锁手机')
-        $result.ocrFailed     = [bool]($ocr -match '加载失败' -or $ocr -match '无法连接' -or $ocr -match '连接失败' -or $ocr -match '小米社区反馈')
-      }
-    }
+    # 这里【不做页面判定、不跑 OCR】：capture 是"拍照"接口，随时都会被调用，
+    # 判定只在 phone_wake 的唤起期间可靠，平时判极易误判。
+    # OCR 也不在这里跑——它要 1 秒多，看画面时白拖慢。
 
     # 变化区域够小就额外产一张裁图：调一次拿两样，省 token
     if ($result.box -and -not $region) {

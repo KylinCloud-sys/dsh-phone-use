@@ -1,5 +1,19 @@
 ﻿# CHANGELOG
 
+## 0.6.2 — 2026-11-02
+
+**页面判定只在 `phone_wake` 做，`phone_see` 不再判定。**
+
+问题：`phone_see` 原本也做页面判定，画面空白时返回 `screen-not-projected` 并**不给图**。
+但这个判定只在唤起期间可靠——手机确认唤起后，画面可能是任意 App、任意配色
+（实测深色桌面 `dark=0.92` 就会被判成「没投屏」），AI 连图都看不到，直接误判。
+
+- `phone_see` 现在只负责把画面交给 AI 看，**不做任何状态判定、不跑 OCR**，
+  画面是什么由 AI 看图自己判断。
+- PS 侧 `capture` 同步移除 `blank` / `ocrConnecting` / `ocrUnlock` / `ocrFailed` 计算
+  与 OCR 调用（省掉约 1 秒，看画面更快）。
+- `phone_wake` 的三判据链路保持不变，仍是唤起期间唯一可靠的状态来源。
+- skill 同步说明：`phone_see` 不判定，判定只在 `phone_wake`。
 ## 0.6.1 — 2026-11-01
 
 **安装方式改为复制到 DSH 目录，不再用软链接。**

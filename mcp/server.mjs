@@ -224,7 +224,7 @@ const TOOLS = [
   },
   {
     name: 'phone_see',
-    description: '看小米互联手机画面（后台，不抢焦点）。返回画面区尺寸与是否变化；有变化才带图。region 可只看一块（百分比 "x,y,w,h"），没变化时不返回图片。',
+    description: '看小米互联手机画面（后台，不抢焦点）。只负责把画面交给你看，【不做页面状态判定】——画面是什么、该点哪里，由你自己看图判断。返回画面区尺寸与是否变化；有变化才带图。region 可只看一块（百分比 "x,y,w,h"），没变化时不返回图片。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -240,19 +240,15 @@ const TOOLS = [
       const r = await run(req, 40000)
       if (r.ok === false) return { text: { ok: false, error: r.error } }
       const img = r.img || {}
-      const blank = img.blank === true
       const unchanged = img.changed === false && !args.region
       const payload = { ok: true, s: [r.screen.w, r.screen.h], ch: img.changed !== false }
       if (img.changed !== false && img.box) payload.box = img.box
-      if (blank) {
-        payload.blank = true
-        payload.state = 'screen-not-projected'
-        payload.note = '画面是空白：投屏通道没建立（手机可能不在同一局域网/未开启互联），此时不需要指纹解锁。'
-      } else if (unchanged) {
-        payload.note = '画面未变化'
-      }
+      if (unchanged) payload.note = '画面未变化'
+      // 这里【不做任何页面判定】：画面状态只有 phone_wake 在唤起期间才可靠，
+      // 平时看画面时做判定极容易误判（浅色桌面会被判成没投屏）。
+      // phone_see 只负责把画面交给你看，画面是什么由你自己判断。
       const file = args.image === 'full' ? FRAME : img.cropPath || FRAME
-      const wantImage = args.image !== 'none' && !unchanged && !blank
+      const wantImage = args.image !== 'none' && !unchanged
       return { text: payload, image: wantImage ? file : null }
     },
   },
