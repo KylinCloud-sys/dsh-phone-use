@@ -42,8 +42,6 @@ fs.mkdirSync(BASE, { recursive: true })
 const FRAME = path.join(BASE, 'last.png')
 const FRAME_RAW = path.join(BASE, 'last.raw.png')
 const REGION = path.join(BASE, 'last.region.png')
-const BASELINE = path.join(BASE, 'baseline.png')
-const VIEW_STATE = path.join(BASE, 'view-state.json')
 // 会话开始时清掉上一会话的 baseline/view-state（modelBaseline 必须属于当前模型上下文）。
 const KEEP = new Set(['last.png', 'last.raw.png', 'last.region.png', 'plugin-boot.log'])
 

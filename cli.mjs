@@ -19,7 +19,6 @@ import { fileURLToPath } from 'node:url'
 const PKG_DIR = path.dirname(fileURLToPath(import.meta.url))
 const SCRIPT = path.join(PKG_DIR, 'scripts', 'phone.ps1')
 const BASE = path.join(os.tmpdir(), 'dsh-phone-use')
-const STATE_FILE = path.join(BASE, 'cli-state.json')
 const CONFIG_FILE = path.join(PKG_DIR, 'config.json')
 
 fs.mkdirSync(BASE, { recursive: true })
@@ -29,22 +28,6 @@ function readConfig() {
     return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'))
   } catch {
     return {}
-  }
-}
-
-function readState() {
-  try {
-    return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'))
-  } catch {
-    return {}
-  }
-}
-
-function writeState(next) {
-  try {
-    fs.writeFileSync(STATE_FILE, JSON.stringify(next), 'utf8')
-  } catch {
-    /* 忽略 */
   }
 }
 

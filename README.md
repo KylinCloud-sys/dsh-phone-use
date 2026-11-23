@@ -163,7 +163,7 @@ AI 应先调用 `phone_wake`。返回 `unlockRequired:false`（`ready`/`restored
 
 ### 窗口恢复和剪贴板恢复不是一回事
 
-`phone_wake` / PowerShell 的 `restore` 是恢复已经存在但最小化的小米互联窗口；`clip:"@restore"` 只恢复剪贴板内容。二者不要混淆。
+`phone_wake` 负责恢复已经存在但最小化的小米互联窗口；`clip:"@restore"` 只恢复剪贴板内容。二者不要混淆。
 
 ```json
 // 看画面（默认关键帧策略；首次会回带标尺的整屏图）

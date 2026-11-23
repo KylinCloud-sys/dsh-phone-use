@@ -1,5 +1,14 @@
 ﻿# CHANGELOG
 
+## 0.7.1 — 2026-11-23
+
+**代码清理与性能优化。**
+
+- 删除已废弃的顶层 `tap` / `swipe` / `text` / `longpress` / `clip` / `key` / `restore` 动作，所有输入统一走 `phone_do` 的 `batch` 步骤，减少重复入口。
+- `Get-SurfaceStats` 复用 `Invoke-Capture` 已经算好的空白统计，去掉重复的 96×96 像素采样与无人使用的 `mean` / `stdev` 计算；唤醒判定仍需的 `dominant` / `dark` / `colors` / `hash` 保持不变。
+- 删除已经无人调用的 `maxWidth` 缩放分支、`RulerResult` 调试字段，以及 `mcp/server.mjs`、`cli.mjs` 中未使用的状态常量/函数。
+- 删除一次性诊断脚本 `scripts/capture-cast-flow.ps1`。
+
 ## 0.7.0 — 2026-11-23
 
 **三处新设计：截图标尺、区域截图 + 关键帧、滚轮滚动。**

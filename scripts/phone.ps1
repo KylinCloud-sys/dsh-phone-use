@@ -15,17 +15,12 @@
 
   请求 JSON：
     {"action":"info"}
-    {"action":"capture","out":"...png","prev":"...png","region":[x,y,w,h],"maxWidth":0}
+    {"action":"capture","out":"...png","prev":"...png","region":[x,y,w,h]}
     {"action":"capture","smart":true,"out":"...png","rawOut":"...png","mode":"auto|full|region","region":[x,y,w,h],"opsDelta":0,"commit":true}
     {"action":"batch","steps":[{"op":"wheel","wheel":"down","notches":3,"at":"50,60","wait":400}],"capture":true,"out":"...png","rawOut":"...png"}
-    {"action":"tap","x":50,"y":88}            # 百分比
-    {"action":"swipe","from":[50,95],"to":[50,40],"ms":300}
-    {"action":"longpress","x":40,"y":96,"ms":900}
-    {"action":"text","value":"hello","at":"40,96","menu":"38,18"}   # ASCII 直接打，含中文时必须给 menu（粘贴坐标）
-    {"action":"openmenu","at":"40,96","value":"要粘贴的文字"}        # 只弹菜单 + 出图，不点任何菜单项
-    {"action":"clip","value":"..."}         # 写剪贴板；value 为 "@restore" 时还原
-    {"action":"key","name":"backspace","n":3}
-    {"action":"restore"}
+    {"action":"openmenu","at":"40,96","text":"要粘贴的文字"}        # 只弹菜单 + 出图，不点任何菜单项
+    {"action":"panel","side":"control|notification"}
+    {"action":"back"}
 #>
 param(
   [Parameter(Mandatory = $true)][string]$RequestFile,
@@ -482,8 +477,6 @@ namespace MiPhone
         public double Minor;
         public int BorderPx;
         public string Theme;
-        public double X0, X1, Y0, Y1;
-        public bool IsFull;
     }
 
     public class Ruler
@@ -545,7 +538,7 @@ namespace MiPhone
             return n > 0 && (sum / n) < 80;
         }
 
-        public static RulerResult Draw(Bitmap content, double x0, double x1, double y0, double y1, int screenW, int screenH, int gridStep, string theme)
+        public static RulerResult Draw(Bitmap content, double x0, double x1, double y0, double y1, int gridStep, string theme)
         {
             int cw = content.Width, ch = content.Height;
             if (x1 <= x0) x1 = x0 + 0.001;
@@ -685,7 +678,6 @@ namespace MiPhone
             rr.Minor = minorX;
             rr.BorderPx = borderW;
             rr.Theme = dark ? "dark" : "light";
-            rr.X0 = x0; rr.X1 = x1; rr.Y0 = y0; rr.Y1 = y1; rr.IsFull = full;
             return rr;
         }
     }
@@ -914,12 +906,11 @@ function Get-BlankStats($bmp) {
     $stepY = [math]::Max(1, [int]($bmp.Height / 96))
     $colors = New-Object 'System.Collections.Generic.HashSet[string]'
     $colorCount = New-Object 'System.Collections.Generic.Dictionary[string,int]'
-    $sum = 0.0; $sum2 = 0.0; $n = 0; $darkCount = 0
+    $n = 0; $darkCount = 0
     for ($sy = 0; $sy -lt $bmp.Height; $sy += $stepY) {
       for ($sx = 0; $sx -lt $bmp.Width; $sx += $stepX) {
         $c = $bmp.GetPixel($sx, $sy)
-        $v = ($c.R + $c.G + $c.B) / 3.0
-        $sum += $v; $sum2 += $v * $v; $n++
+        $n++
         $key = "$([int]($c.R / 16)):$([int]($c.G / 16)):$([int]($c.B / 16))"
         [void]$colors.Add($key)
         if ($colorCount.ContainsKey($key)) { $colorCount[$key]++ } else { $colorCount[$key] = 1 }
@@ -927,13 +918,10 @@ function Get-BlankStats($bmp) {
       }
     }
     if ($n -gt 0) {
-      $mean = $sum / $n
-      $sd = [math]::Sqrt([math]::Max(0.0, ($sum2 / $n) - ($mean * $mean)))
       $top = 0
       foreach ($kv in $colorCount.GetEnumerator()) { if ($kv.Value -gt $top) { $top = $kv.Value } }
       $out.colors = $colors.Count
       $out.dominant = [math]::Round([double]$top / [double]$n, 3)
-      $out.stdev = [math]::Round($sd, 2)
       $out.dark = [math]::Round($darkCount / [double]$n, 4)
     }
   } catch { }
@@ -943,7 +931,7 @@ function Get-BlankStats($bmp) {
 # 单次截图：返回展示图（可带标尺）+ 原始整帧（可选落盘）。
 # 关键约定：result.w/h 是「截图内容图」的实际像素尺寸；展示图尺寸是 imageW/imageH；
 # contentBox 是内容在展示图中的位置 [left, top, right, bottom]。
-function Invoke-Capture($target, [string]$out = '', [string]$prev = '', $region = $null, [int]$maxWidth = 0, [string]$rawOut = '', [bool]$drawRuler = $false, [int]$gridStep = 10, [string]$rulerTheme = 'light', $preFrame = $null) {
+function Invoke-Capture($target, [string]$out = '', [string]$prev = '', $region = $null, [string]$rawOut = '', [bool]$drawRuler = $false, [int]$gridStep = 10, [string]$rulerTheme = 'light', $preFrame = $null) {
   $ownFull = $false
   if ($null -ne $preFrame) {
     $full = $preFrame
@@ -994,28 +982,10 @@ function Invoke-Capture($target, [string]$out = '', [string]$prev = '', $region 
       }
     }
 
-    # 等比缩小只作用于「内容」，缩放后再画标尺，保证标签不会跟着糊掉。
-    if ($maxWidth -gt 0 -and $content.Width -gt $maxWidth) {
-      $ratio = $maxWidth / [double]$content.Width
-      $nw = [int][math]::Round($content.Width * $ratio)
-      $nh = [int][math]::Round($content.Height * $ratio)
-      $small = New-Object System.Drawing.Bitmap($nw, $nh)
-      $sg = [System.Drawing.Graphics]::FromImage($small)
-      $sg.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
-      $sg.DrawImage($content, 0, 0, $nw, $nh)
-      $sg.Dispose()
-      if (-not [object]::ReferenceEquals($content, $full)) { $content.Dispose() }
-      $content = $small
-      # 缩放后 s 按文档要求改为展示内容尺寸；百分比不变。
-      $result.w = $nw; $result.h = $nh
-      $result.screen = @{ w = $nw; h = $nh }
-      $result.expectedS = @($nw, $nh)
-    }
-
     $display = $content
     $rr = $null
     if ($drawRuler) {
-      $rr = [MiPhone.Ruler]::Draw($content, $x0, $x1, $y0, $y1, $result.w, $result.h, $gridStep, $rulerTheme)
+      $rr = [MiPhone.Ruler]::Draw($content, $x0, $x1, $y0, $y1, $gridStep, $rulerTheme)
       $display = $rr.Image
       $result.contentBox = @($rr.MarginPx, $rr.MarginPx, ($rr.MarginPx + $content.Width), ($rr.MarginPx + $content.Height))
       $result.grid = @{
@@ -1296,7 +1266,7 @@ function Invoke-SmartCapture($target, $req) {
       }
     }
 
-    $img = Invoke-Capture $target $out $baselinePath $regionPct 0 $rawOut $gridOn $gridStep $theme $full
+    $img = Invoke-Capture $target $out $baselinePath $regionPct $rawOut $gridOn $gridStep $theme $full
     $img.mode = $mode
     $img.reason = $reason
     $img.dimensionChanged = $dimensionChanged
@@ -1544,7 +1514,7 @@ function Invoke-PasteAt($target, [string]$text, [string]$at, [string]$menu, [int
   Set-Clipboard -Value $text -ErrorAction Stop
   Start-Sleep -Milliseconds 2000        # 等互联同步剪贴板（实测可能要 3s+，见 DEVLOG D4b）
 
-  try { Invoke-Capture $target $preShot $null $null 0 | Out-Null } catch { }
+  try { Invoke-Capture $target $preShot $null $null | Out-Null } catch { }
   Invoke-LongPress $target $ptA[0] $ptA[1] $holdMs
   Start-Sleep -Milliseconds 700
   Invoke-Tap $target $ptM[0] $ptM[1]
@@ -1556,7 +1526,7 @@ function Invoke-PasteAt($target, [string]$text, [string]$at, [string]$menu, [int
   $fieldRect = @(2, [int]($ry * 100.0 / $client.H), 96, [int]($rh * 100.0 / $client.H))
   $inserted = $null
   try {
-    Invoke-Capture $target $afterShot $null $null 0 | Out-Null
+    Invoke-Capture $target $afterShot $null $null | Out-Null
     $inserted = Test-RegionChanged $preShot $afterShot $fieldRect $client
   } catch { $inserted = $null }
 
@@ -1621,14 +1591,14 @@ function Invoke-OpenMenu($target, [string]$at, [int]$holdMs, [string]$text) {
 
   $preShot = Join-Path $shotDir 'menu-pre.png'
   $postShot = Join-Path $shotDir 'menu-post.png'
-  try { Invoke-Capture $target $preShot $null $null 0 | Out-Null } catch { }
+  try { Invoke-Capture $target $preShot $null $null | Out-Null } catch { }
   Invoke-LongPress $target $ptA[0] $ptA[1] $holdMs
 
   $box = $null
   for ($r = 1; $r -le 3; $r++) {
     Start-Sleep -Milliseconds 700
     try {
-      Invoke-Capture $target $postShot $null $null 0 | Out-Null
+      Invoke-Capture $target $postShot $null $null | Out-Null
       $probe = Get-PopupBox $preShot $postShot $client
       if ($probe -and $probe.w -ge 100 -and $probe.h -ge 40) { $box = $probe; break }
       if ($probe -and -not $box) { $box = $probe }
@@ -1854,49 +1824,22 @@ function Resolve-ScreenShareExecutable([string]$exeName = 'MiSmartShareHandoff.e
 function Get-SurfaceStats($target, [bool]$WantOcr = $false) {
   $tmp = Join-Path ([IO.Path]::GetTempPath()) ('mi-surface-' + [guid]::NewGuid().ToString('N') + '.png')
   try {
-    $null = Invoke-Capture $target $tmp $null $null 0
-    if (-not (Test-Path -LiteralPath $tmp)) { return $null }
-    $bmp = [System.Drawing.Bitmap]::FromFile($tmp)
-    try {
-      $stepX = [math]::Max(1, [int]($bmp.Width / 96))
-      $stepY = [math]::Max(1, [int]($bmp.Height / 96))
-      $colorCount = New-Object 'System.Collections.Generic.Dictionary[string,int]'
-      $sum = 0.0; $sum2 = 0.0; $n = 0; $darkCount = 0
-
-      for ($y = 0; $y -lt $bmp.Height; $y += $stepY) {
-        for ($x = 0; $x -lt $bmp.Width; $x += $stepX) {
-          $c = $bmp.GetPixel($x, $y)
-          $v = ($c.R + $c.G + $c.B) / 3.0
-          $sum += $v; $sum2 += $v * $v; $n++
-          $key = "$([int]($c.R / 16)):$([int]($c.G / 16)):$([int]($c.B / 16))"
-          if ($colorCount.ContainsKey($key)) { $colorCount[$key]++ } else { $colorCount[$key] = 1 }
-          if ($c.R -lt 60 -and $c.G -lt 60 -and $c.B -lt 60) { $darkCount++ }
-        }
-      }
-      if ($n -eq 0) { return $null }
-      $mean = $sum / $n
-      $sd = [math]::Sqrt([math]::Max(0.0, ($sum2 / $n) - ($mean * $mean)))
-      $top = 0
-      foreach ($kv in $colorCount.GetEnumerator()) { if ($kv.Value -gt $top) { $top = $kv.Value } }
-      $dominant = [double]$top / [double]$n
-      $darkRatio = $darkCount / [double]$n
-      # 占位页：单一主色占满 或 整屏过暗。
-      # 实测连接中 0.974 / 待解锁 0.963 / 连接失败 0.968，真实画面 0.389~0.824。
-      $isBlank = (($dominant -ge 0.94) -or ($darkRatio -ge 0.60))
-      # OCR 要 1 秒多，只在"确认是占位页 + 调用方明确要文字"时才跑。
-      $ocr = $null
-      if ($WantOcr -and $isBlank) { $ocr = Get-SurfaceOcrText $tmp }
-      return @{
-        colors   = $colorCount.Count
-        mean     = [math]::Round($mean, 1)
-        stdev    = [math]::Round($sd, 2)
-        dominant = [math]::Round($dominant, 3)
-        dark     = [math]::Round($darkRatio, 4)
-        blank    = $isBlank
-        hash     = [MiPhone.Img]::Hash($bmp)
-        ocr      = $ocr
-      }
-    } finally { $bmp.Dispose() }
+    $cap = Invoke-Capture $target $tmp $null $null
+    if ($null -eq $cap -or -not (Test-Path -LiteralPath $tmp)) { return $null }
+    # 占位页：单一主色占满 或 整屏过暗。
+    # 实测连接中 0.974 / 待解锁 0.963 / 连接失败 0.968，真实画面 0.389~0.824。
+    $isBlank = ([double]$cap.dominant -ge 0.94) -or ([double]$cap.dark -ge 0.60)
+    # OCR 要 1 秒多，只在"确认是占位页 + 调用方明确要文字"时才跑。
+    $ocr = $null
+    if ($WantOcr -and $isBlank) { $ocr = Get-SurfaceOcrText $tmp }
+    return @{
+      colors = $cap.colors
+      dominant = $cap.dominant
+      dark = $cap.dark
+      blank = $isBlank
+      hash = $cap.hash
+      ocr = $ocr
+    }
   } catch {
     return $null
   } finally {
@@ -2321,7 +2264,7 @@ function Invoke-RulerTest($req) {
 
     $rawPath = Join-Path $outDir "raw-${w}x${h}.png"
     $bmp.Save($rawPath, [System.Drawing.Imaging.ImageFormat]::Png)
-    $fullR = [MiPhone.Ruler]::Draw($bmp, 0, 100, 0, 100, $w, $h, 10, 'light')
+    $fullR = [MiPhone.Ruler]::Draw($bmp, 0, 100, 0, 100, 10, 'light')
     $fullPath = Join-Path $outDir "full-${w}x${h}.png"
     $fullR.Image.Save($fullPath, [System.Drawing.Imaging.ImageFormat]::Png)
     $back = $fullR.Image.Clone((New-Object System.Drawing.Rectangle($fullR.MarginPx, $fullR.MarginPx, $w, $h)), $fullR.Image.PixelFormat)
@@ -2333,7 +2276,7 @@ function Invoke-RulerTest($req) {
     $sub = $bmp.Clone((New-Object System.Drawing.Rectangle($rect.X, $rect.Y, $rect.W, $rect.H)), $bmp.PixelFormat)
     $rx0 = $rect.X * 100.0 / $w; $rx1 = ($rect.X + $rect.W) * 100.0 / $w
     $ry0 = $rect.Y * 100.0 / $h; $ry1 = ($rect.Y + $rect.H) * 100.0 / $h
-    $regR = [MiPhone.Ruler]::Draw($sub, $rx0, $rx1, $ry0, $ry1, $w, $h, 10, 'light')
+    $regR = [MiPhone.Ruler]::Draw($sub, $rx0, $rx1, $ry0, $ry1, 10, 'light')
     $regPath = Join-Path $outDir "region-50-60-${w}x${h}.png"
     $regR.Image.Save($regPath, [System.Drawing.Imaging.ImageFormat]::Png)
     $back2 = $regR.Image.Clone((New-Object System.Drawing.Rectangle($regR.MarginPx, $regR.MarginPx, $sub.Width, $sub.Height)), $regR.Image.PixelFormat)
@@ -2344,7 +2287,7 @@ function Invoke-RulerTest($req) {
     # 额外用例：region 0,50,100,20（横向全宽、纵向 50–70），标尺应显示 50/60/70
     $rowRect = Resolve-RegionRect $w $h @(0, 50, 100, 20)
     $rowSub = $bmp.Clone((New-Object System.Drawing.Rectangle($rowRect.X, $rowRect.Y, $rowRect.W, $rowRect.H)), $bmp.PixelFormat)
-    $rowR = [MiPhone.Ruler]::Draw($rowSub, 0, 100, 50, 70, $w, $h, 10, 'light')
+    $rowR = [MiPhone.Ruler]::Draw($rowSub, 0, 100, 50, 70, 10, 'light')
     $rowPath = Join-Path $outDir "region-row-0-50-100-20-${w}x${h}.png"
     $rowR.Image.Save($rowPath, [System.Drawing.Imaging.ImageFormat]::Png)
     $rowSub.Dispose(); $rowR.Image.Dispose()
@@ -2361,9 +2304,6 @@ function Invoke-RulerTest($req) {
     $item.margin = $fm
     $item.font = [int]$fullR.FontPx
     $item.step = [double]$fullR.Step
-    $item.regionStep = [double]$regR.Step
-    $item.regionMinor = [double]$regR.Minor
-    $item.regionBoxArgs = @([double]$regR.X0, [double]$regR.X1, [double]$regR.Y0, [double]$regR.Y1, [bool]$regR.IsFull)
     $item.regionPct = @([math]::Round($rx0, 2), [math]::Round($ry0, 2), [math]::Round($rx1 - $rx0, 2), [math]::Round($ry1 - $ry0, 2))
     $item.regionPx = @($rect.X, $rect.Y, $rect.W, $rect.H)
     $item.contentDiffPixels = @{ full = $fullDiff; region = $regDiff }
@@ -2391,15 +2331,6 @@ try {
 
     switch ($action) {
     'info' { $result = Get-WindowInfo $target }
-    'restore' {
-      # 同样走全后台恢复：不激活窗口、不抢焦点、不动鼠标。
-      $wasIconic = [MiPhone.Native]::IsIconic($target.Parent)
-      $moved = [MiPhone.Native]::RestoreNoActivate($target.Parent)
-      if ($moved) { Start-Sleep -Milliseconds 250 }
-      $info = Get-WindowInfo $target
-      $info.restored = ($wasIconic -or $moved)
-      $result = $info
-    }
     'capture' {
       if ($req.smart) {
         $img = Invoke-SmartCapture $target $req
@@ -2408,8 +2339,6 @@ try {
         $prevPath = [string]$req.prev
         $region = $null
         if ($null -ne $req.region) { $region = @($req.region) }
-        $maxWidth = 0
-        if ($null -ne $req.maxWidth) { $maxWidth = [int]$req.maxWidth }
         $rawOut = [string]$req.rawOut
         $drawRuler = $false
         if ($null -ne $req.ruler) { $drawRuler = [bool]$req.ruler }
@@ -2417,82 +2346,10 @@ try {
         if ($null -ne $req.gridStep) { $gridStep = [int]$req.gridStep }
         $theme = 'light'
         if ($req.rulerTheme) { $theme = [string]$req.rulerTheme }
-        $img = Invoke-Capture $target $out $prevPath $region $maxWidth $rawOut $drawRuler $gridStep $theme
+        $img = Invoke-Capture $target $out $prevPath $region $rawOut $drawRuler $gridStep $theme
       }
       $result = Get-WindowInfo $target
       $result.img = $img
-    }
-    'tap' {
-      $client = Get-ClientInfo $target.Child
-      $px = [int][math]::Round($client.W * ([double]$req.x) / 100.0)
-      $py = [int][math]::Round($client.H * ([double]$req.y) / 100.0)
-      Invoke-Tap $target $px $py
-      $result = Get-WindowInfo $target
-      $result.did = @{ action = 'tap'; px = $px; py = $py; pct = @([double]$req.x, [double]$req.y) }
-    }
-    'swipe' {
-      $client = Get-ClientInfo $target.Child
-      $fx = [int][math]::Round($client.W * ([double]$req.from[0]) / 100.0)
-      $fy = [int][math]::Round($client.H * ([double]$req.from[1]) / 100.0)
-      $tx = [int][math]::Round($client.W * ([double]$req.to[0]) / 100.0)
-      $ty = [int][math]::Round($client.H * ([double]$req.to[1]) / 100.0)
-      $ms = 300
-      if ($null -ne $req.ms) { $ms = [int]$req.ms }
-      Invoke-Swipe $target $fx $fy $tx $ty $ms
-      $result = Get-WindowInfo $target
-      $result.did = @{ action = 'swipe'; from = @($fx, $fy); to = @($tx, $ty); ms = $ms }
-    }
-    'text' {
-      $r = Invoke-Text $target ([string]$req.value) ([string]$req.at) ([string]$req.menu)
-      $result = Get-WindowInfo $target
-      $result.did = $r
-    }
-    'longpress' {
-      $client = Get-ClientInfo $target.Child
-      $px = [int][math]::Round($client.W * ([double]$req.x) / 100.0)
-      $py = [int][math]::Round($client.H * ([double]$req.y) / 100.0)
-      $ms = 700
-      if ($null -ne $req.ms) { $ms = [int]$req.ms }
-      Invoke-LongPress $target $px $py $ms
-      $result = Get-WindowInfo $target
-      $result.did = @{ action = 'longpress'; px = $px; py = $py; ms = $ms }
-    }
-    'clip' {
-      $bak = Join-Path $env:TEMP 'dsh-phone-use\clip-backup.txt'
-      $val = if ($null -ne $req.value) { [string]$req.value } else { $null }
-      # "@restore" 是还原指令，不是要写入的文本。此前漏判会把字面量写进剪贴板。
-      if ($val -eq '@restore') {
-        $restored = $false
-        $reason = 'no-backup'
-        if (Test-Path $bak) {
-          try {
-            $prev = [IO.File]::ReadAllText($bak)
-            # 备份可能是空字符串（备份时剪贴板本来就空）。Set-Clipboard 不接受空串，要特殊处理。
-            if ([string]::IsNullOrEmpty($prev)) {
-              try { Set-Clipboard -Value $null -ErrorAction Stop } catch { }
-            } else {
-              Set-Clipboard -Value $prev -ErrorAction Stop
-            }
-            Remove-Item $bak -Force -ErrorAction SilentlyContinue
-            $restored = $true
-            $reason = 'ok'
-          } catch { $reason = $_.Exception.Message }
-        }
-        $result = @{ ok = $true; clip = 'restored'; restored = $restored; reason = $reason }
-      } elseif ($null -ne $val) {
-        if (-not (Test-Path $bak)) {
-          try {
-            $prev = Get-Clipboard -Raw -ErrorAction Stop
-            [IO.File]::WriteAllText($bak, $prev, [System.Text.UTF8Encoding]::new($false))
-          } catch { }
-        }
-        Set-Clipboard -Value $val -ErrorAction Stop
-        $result = @{ ok = $true; clip = 'set'; n = $val.Length }
-      } else {
-        $text = $null
-        try { $text = Get-Clipboard -Raw -ErrorAction Stop } catch { $text = '' }
-        $result = @{ ok = $true; clip = 'read'; n = $text.Length; head = $text.Substring(0, [math]::Min(40, $text.Length)) }
-      }
     }
     'openmenu' {
       $hold = 0    # 0 = 用默认长按时长（1200ms）
@@ -2501,13 +2358,6 @@ try {
 # 此前这里读 $req.value 导致文字为空、剪贴板没更新，粘贴出来是上一次的旧内容。
       $omText = if ($null -ne $req.text) { [string]$req.text } elseif ($null -ne $req.value) { [string]$req.value } else { '' }
       $r = Invoke-OpenMenu $target ([string]$req.at) $hold $omText
-      $result = Get-WindowInfo $target
-      $result.did = $r
-    }
-    'key' {
-      $n = 1
-      if ($null -ne $req.n) { $n = [int]$req.n }
-      $r = Invoke-Key $target ([string]$req.name) $n
       $result = Get-WindowInfo $target
       $result.did = $r
     }
@@ -2571,7 +2421,7 @@ try {
         # verify 必须先留一张「动作前」的无标尺原图
         if ($null -ne $verify) {
           $preShot = Join-Path $shotDir ('verify-pre-' + [guid]::NewGuid().ToString('N') + '.png')
-          Invoke-Capture $target $preShot $null $null 0 $null $false | Out-Null
+          Invoke-Capture $target $preShot $null $null $null $false | Out-Null
         }
 
         foreach ($st in @($req.steps)) {
@@ -2608,10 +2458,10 @@ try {
               if ($null -ne $st.wait) { $wm = [int]$st.wait }
               $preW = Join-Path $shotDir ('wheel-pre-' + [guid]::NewGuid().ToString('N') + '.png')
               $postW = Join-Path $shotDir ('wheel-post-' + [guid]::NewGuid().ToString('N') + '.png')
-              Invoke-Capture $target $preW $null $null 0 $null $false | Out-Null
+              Invoke-Capture $target $preW $null $null $null $false | Out-Null
               $wi = Invoke-Wheel $target $dir $nt $at
               Start-Sleep -Milliseconds $wm
-              Invoke-Capture $target $postW $null $null 0 $null $false | Out-Null
+              Invoke-Capture $target $postW $null $null $null $false | Out-Null
               $sd = Get-ScrollDiff $preW $postW
               $scrolled = ($null -ne $sd -and $sd.changed)
               $atEdge = $false
@@ -2622,7 +2472,7 @@ try {
                 Invoke-Wheel $target $dir 1 $at $false | Out-Null
                 Start-Sleep -Milliseconds $wm
                 $postAlt = Join-Path $shotDir ('wheel-alt-' + [guid]::NewGuid().ToString('N') + '.png')
-                Invoke-Capture $target $postAlt $null $null 0 $null $false | Out-Null
+                Invoke-Capture $target $postAlt $null $null $null $false | Out-Null
                 $sdAlt = Get-ScrollDiff $postW $postAlt
                 if ($null -ne $sdAlt -and $sdAlt.changed) { $scrolled = $true; $sd = $sdAlt }
                 Remove-Item $postAlt -Force -ErrorAction SilentlyContinue
@@ -2633,7 +2483,7 @@ try {
                 Invoke-Wheel $target $dir $extra $at | Out-Null
                 Start-Sleep -Milliseconds $wm
                 $postW2 = Join-Path $shotDir ('wheel-post2-' + [guid]::NewGuid().ToString('N') + '.png')
-                Invoke-Capture $target $postW2 $null $null 0 $null $false | Out-Null
+                Invoke-Capture $target $postW2 $null $null $null $false | Out-Null
                 $sd2 = Get-ScrollDiff $postW $postW2
                 if ($null -ne $sd2 -and $sd2.changed) { $scrolled = $true; $sd = $sd2 }
                 else { $atEdge = $true; if ($null -ne $sd2) { $sd = $sd2 } }
@@ -2644,10 +2494,10 @@ try {
                 $rev = if ($dir -eq 'up') { 'down' } else { 'up' }
                 $preR = Join-Path $shotDir ('wheel-rev-pre-' + [guid]::NewGuid().ToString('N') + '.png')
                 $postR = Join-Path $shotDir ('wheel-rev-post-' + [guid]::NewGuid().ToString('N') + '.png')
-                Invoke-Capture $target $preR $null $null 0 $null $false | Out-Null
+                Invoke-Capture $target $preR $null $null $null $false | Out-Null
                 Invoke-Wheel $target $rev 2 $at | Out-Null
                 Start-Sleep -Milliseconds $wm
-                Invoke-Capture $target $postR $null $null 0 $null $false | Out-Null
+                Invoke-Capture $target $postR $null $null $null $false | Out-Null
                 $sdR = Get-ScrollDiff $preR $postR
                 if ($null -ne $sdR -and $sdR.changed) {
                   $notScrollable = $false
