@@ -152,17 +152,14 @@ namespace MiPhone
         }
 
         // 后台滚轮：只向投屏子窗口发 WM_MOUSEWHEEL，不移动真实鼠标、不抢焦点。
-        // WM_MOUSEWHEEL 的 lParam 按 Win32 约定是「屏幕坐标」，但部分自绘控件按客户区坐标解析；
-        // 这里先按屏幕坐标发送（标准路径），实测不行时由 PS 层回退客户区坐标模式。
-        public static void SendWheel(IntPtr h, int delta, int clientX, int clientY, bool screenCoords)
+        // WM_MOUSEWHEEL 的 lParam 按 Win32 约定使用屏幕坐标。
+        public static void SendWheel(IntPtr h, int delta, int clientX, int clientY)
         {
             POINT p;
             p.X = clientX; p.Y = clientY;
             ClientToScreen(h, ref p);
-            int x = screenCoords ? p.X : clientX;
-            int y = screenCoords ? p.Y : clientY;
             IntPtr wParam = (IntPtr)(delta << 16);
-            IntPtr lParam = (IntPtr)((y & 0xFFFF) << 16 | (x & 0xFFFF));
+            IntPtr lParam = (IntPtr)((p.Y & 0xFFFF) << 16 | (p.X & 0xFFFF));
             SendMessage(h, 0x020A, wParam, lParam);   // WM_MOUSEWHEEL
         }
     }
@@ -980,6 +977,9 @@ function Invoke-Capture($target, [string]$out = '', [string]$prev = '', $region 
           [math]::Round($x1 - $x0, 2), [math]::Round($y1 - $y0, 2)
         )
       }
+      # w/h 是返回内容图的像素尺寸；s/screen 仍是完整画面区尺寸。
+      $result.w = $content.Width
+      $result.h = $content.Height
     }
 
     $display = $content
@@ -1029,7 +1029,7 @@ function Invoke-Capture($target, [string]$out = '', [string]$prev = '', $region 
               $result.ratio = [math]::Round($ds.ChangeRatio, 4)
               $result.diffPx = $ds.ChangedPixels
               $result.headerRatio = [math]::Round($ds.HeaderRatio, 4)
-              $result.changed = ($ds.ChangedBlocks -ge 1) -or ($ds.ChangeRatio -ge 0.001)
+              $result.changed = ($ds.ChangedBlocks -ge 1)
               if (-not $result.changed) { $result.note = '画面未变化' }
             }
           }
@@ -1446,23 +1446,25 @@ function Invoke-LongPress($target, [int]$x, [int]$y, [int]$ms) {
 }
 
 # 后台滚轮：1 格 = 120 delta；up 正、down 负。只发窗口消息，不移动真实鼠标。
-function Invoke-Wheel($target, [string]$direction, [int]$notches, [string]$at, [bool]$screenCoords = $true) {
+function Invoke-Wheel($target, [string]$direction, [int]$notches, [string]$at) {
   $child = $target.Child
   $client = Get-ClientInfo $child
   if ([string]::IsNullOrEmpty($at)) { $at = '50,50' }
   $pt = ConvertTo-Point $at $client
   if ($notches -lt 1) { $notches = 1 }
-  if ($notches -gt 20) { $notches = 20 }
+  if ($notches -gt 10) { $notches = 10 }
   $delta = 120
   if ($direction -eq 'down') { $delta = -120 }
+  # 个别小米互联版本滚轮方向相反，可通过 config.json 的 invertWheel 翻转。
+  if ($script:InvertWheel) { $delta = -$delta }
   # 先投递 MOVE 让远端知道滚轮作用点（仍为后台窗口消息）
   [void][MiPhone.Native]::SendMessage($child, 0x0200, [IntPtr]::Zero, (New-LParam $pt[0] $pt[1]))
   Start-Sleep -Milliseconds 25
   for ($i = 0; $i -lt $notches; $i++) {
-    [MiPhone.Native]::SendWheel($child, $delta, $pt[0], $pt[1], $screenCoords)
+    [MiPhone.Native]::SendWheel($child, $delta, $pt[0], $pt[1])
     Start-Sleep -Milliseconds 35
   }
-  return @{ direction = $direction; notches = $notches; at = $at; px = $pt; screenCoords = $screenCoords }
+  return @{ direction = $direction; notches = $notches; at = $at; px = $pt }
 }
 
 function Send-KeyMessage([IntPtr]$child, [int]$vk, [bool]$withChar) {  $scan = [MiPhone.Native]::MapVirtualKey([uint32]$vk, 0) -band 0xFF
@@ -2319,6 +2321,7 @@ $result = $null
 try {
   $raw = [System.IO.File]::ReadAllText($RequestFile, [System.Text.Encoding]::UTF8)
   $req = $raw | ConvertFrom-Json
+  $script:InvertWheel = ($null -ne $req.invertWheel -and [bool]$req.invertWheel)
   $action = [string]$req.action
   $spec = Resolve-WindowSpec $req.win
 
@@ -2467,16 +2470,6 @@ try {
               $atEdge = $false
               $notScrollable = $false
               $extra = 0
-              if (-not $scrolled) {
-                # 兼容少数按客户区坐标解析 WM_MOUSEWHEEL 的控件：先试 1 格客户区坐标模式
-                Invoke-Wheel $target $dir 1 $at $false | Out-Null
-                Start-Sleep -Milliseconds $wm
-                $postAlt = Join-Path $shotDir ('wheel-alt-' + [guid]::NewGuid().ToString('N') + '.png')
-                Invoke-Capture $target $postAlt $null $null $null $false | Out-Null
-                $sdAlt = Get-ScrollDiff $postW $postAlt
-                if ($null -ne $sdAlt -and $sdAlt.changed) { $scrolled = $true; $sd = $sdAlt }
-                Remove-Item $postAlt -Force -ErrorAction SilentlyContinue
-              }
               if (-not $scrolled) {
                 # 连续再滚 2 格仍无变化 → 已到顶/到底
                 $extra = 2

@@ -12,6 +12,8 @@ DeepSeek Harness 插件：在**后台**操控手机——截图、点击、滑�
 
 当前实现只针对小米互联。代码里以 `mi` 命名的部分（`scripts/phone.ps1` 的 `MiPhone` 命名空间、小米窗口类名、`MiSmartShareHandoff` 等）**专指小米通道**，不要挪进通用层。新增 adb 或其他品牌时，应在通用调度层（`phone_wake` / `phone_see` / `phone_do` 的入口与状态判断）之外另开通道模块。
 
+开发设计文档（三方案、标尺详细设计、API/验收）见 [docs/README.md](docs/README.md)。
+
 **零配置**：不需要环境变量、不需要填设备 ID、不需要改任何配置文件，装好就能用。
 
 ## 有什么用
@@ -195,8 +197,10 @@ AI 应先调用 `phone_wake`。返回 `unlockRequired:false`（`ready`/`restored
 改 `config.json`，**即时生效，不用重启**：
 
 ```json
-{ "permission": "auto" }
+{ "permission": "auto", "invertWheel": false }
 ```
+
+`invertWheel:true` 用于个别小米互联版本滚轮方向相反的情况。
 
 | 档 | 行为 |
 |---|---|

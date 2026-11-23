@@ -34,6 +34,7 @@ function readConfig() {
 function run(req, timeoutMs = 60000) {
   const cfg = readConfig()
   if (cfg.window) req = { ...req, win: cfg.window }
+  if (cfg.invertWheel === true) req = { ...req, invertWheel: true }
   const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   const reqFile = path.join(BASE, `cli-req-${id}.json`)
   const resFile = path.join(BASE, `cli-res-${id}.json`)

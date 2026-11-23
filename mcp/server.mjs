@@ -75,6 +75,7 @@ function readConfig() {
 function run(req, timeoutMs = 60000) {
   const cfg = readConfig()
   if (cfg.window) req = { ...req, win: cfg.window }
+  if (cfg.invertWheel === true) req = { ...req, invertWheel: true }
   const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   const reqFile = path.join(BASE, `mcp-req-${id}.json`)
   const resFile = path.join(BASE, `mcp-res-${id}.json`)
@@ -456,6 +457,7 @@ const TOOLS = [
         if (img.changeBoxPct) payload.changeBoxPct = img.changeBoxPct
         if (img.box) payload.box = img.box
         if (img.screen) payload.screen = [img.screen.w, img.screen.h]
+        if (img.region) { payload.region = img.region; payload.coordSpace = 'screen' }
         if (img.dimensionChanged) payload.dimensionChanged = true
         if (img.changed === false && img.mode !== 'full') payload.note = '画面未变化（点击可能没生效）'
       }

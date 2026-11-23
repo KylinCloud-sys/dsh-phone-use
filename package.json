@@ -1,6 +1,6 @@
 {
   "name": "dsh-phone-use",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "private": true,
   "description": "DeepSeek Harness plugin: background phone control. Currently Xiaomi screen-share; adb and other brands planned.",
   "type": "module",
@@ -17,7 +17,8 @@
     "config.json",
     "CHANGELOG.md",
     "LICENSE",
-    "client/"
+    "client/",
+    "docs/"
   ],
   "dsh": {
     "bundle": {
