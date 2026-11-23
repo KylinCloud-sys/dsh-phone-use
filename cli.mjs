@@ -116,6 +116,12 @@ function normalize(steps) {
     } else if (raw.longpress !== undefined) out.push({ op: 'longpress', at: String(raw.longpress), ms: raw.ms ?? 800, danger })
     else if (raw.openmenu !== undefined) out.push({ op: 'openmenu', at: String(raw.openmenu), text: raw.text ? String(raw.text) : '', ms: raw.ms ?? 900 })
     else if (raw.text !== undefined) out.push({ op: 'text', value: String(raw.text), at: raw.at ? String(raw.at) : '', menu: raw.menu ? String(raw.menu) : '', danger })
+    else if (raw.wheel !== undefined) {
+      const dir = String(raw.wheel)
+      if (dir !== 'up' && dir !== 'down') throw new Error('wheel 只能是 up 或 down')
+      const notches = Number.isFinite(Number(raw.notches)) ? Math.max(1, Math.min(10, Math.trunc(Number(raw.notches)))) : 3
+      out.push({ op: 'wheel', wheel: dir, notches, at: raw.at ? String(raw.at) : '50,50', wait: Number.isFinite(Number(raw.wait)) ? Number(raw.wait) : 400, danger })
+    }
     else if (raw.key !== undefined) out.push({ op: 'key', name: String(raw.key), n: raw.n ?? 1, danger })
     else if (raw.wait !== undefined) out.push({ op: 'wait', ms: Number(raw.wait) || 300 })
     else if (raw.clip !== undefined) out.push({ op: 'clip', value: raw.clip === true || raw.clip === 'read' ? null : String(raw.clip) })
@@ -149,20 +155,23 @@ if (cmd === 'wake') {
   })
 } else if (cmd === 'see') {
   const out = path.join(BASE, `cli-see-${Date.now()}.png`)
-  const prev = readState().lastPath
-  const req = { action: 'capture', out }
-  if (prev && fs.existsSync(prev) && !rest.includes('--region')) req.prev = prev
   const region = flagValue('--region')
+  const mode = region ? 'region' : rest.includes('--full') ? 'full' : 'auto'
+  const req = {
+    action: 'capture', smart: true, out, rawOut: path.join(BASE, 'last.raw.png'), mode,
+    commit: true, grid: 'ruler',
+  }
   if (region) req.region = region.split(',').map(Number)
-  const r = await run(req, 40000)
+  const r = await run(req, 60000)
   if (r.ok === false) { emit({ ok: false, error: r.error }); process.exit(0) }
   const img = r.img || {}
-  const changed = img.changed !== false
-  if (rest.includes('--region') === false) writeState({ lastPath: out })
-  const payload = { ok: true, s: [r.screen.w, r.screen.h], ch: changed }
-  if (changed && img.box) payload.box = img.box
-  if (!changed) payload.note = '画面未变化'
-  payload.path = img.cropPath && !rest.includes('--full') ? img.cropPath : out
+  const s = img.screen ? [img.screen.w, img.screen.h] : [r.screen.w, r.screen.h]
+  const payload = { ok: true, s, ch: img.changed !== false, mode: img.mode, reason: img.reason, frameId: img.frameId, expectedS: img.expectedS, out: img.out, contentBox: img.contentBox }
+  if (img.changeBoxPx) payload.changeBoxPx = img.changeBoxPx
+  if (img.changeBoxPct) payload.changeBoxPct = img.changeBoxPct
+  if (img.region) { payload.region = img.region; payload.coordSpace = 'screen' }
+  if (img.changed === false && img.mode !== 'full') payload.note = '画面未变化'
+  payload.path = img.path || out
   emit(payload)
 } else if (cmd === 'do') {
   let spec
@@ -181,23 +190,38 @@ if (cmd === 'wake') {
     emit({ ok: false, ...blocked }); process.exit(0)
   }
   const out = path.join(BASE, `cli-do-${Date.now()}.png`)
-  const prev = readState().lastPath
-  const req = { action: 'batch', steps, capture: true, out }
-  if (prev && fs.existsSync(prev)) req.prev = prev
+  const req = {
+    action: 'batch', steps, capture: true, out,
+    rawOut: path.join(BASE, 'last.raw.png'),
+    mode: flagValue('--full') ? 'full' : 'auto', grid: 'ruler',
+  }
+  if (spec.expectedS) req.expectedS = spec.expectedS
+  if (spec.grid) req.grid = String(spec.grid)
+  if (spec.rulerTheme) req.rulerTheme = String(spec.rulerTheme)
   const v = flagValue('--verify')
   if (v) { req.verify = v.split(',').map(Number); req.retry = true }
-  const r = await run(req, 90000)
-  if (r.ok === false) { emit({ ok: false, error: r.error }); process.exit(0) }
-  writeState({ lastPath: out })
-  const payload = { ok: true, s: [r.screen.w, r.screen.h], did: (r.steps || []).length }
+  const r = await run(req, 120000)
+  if (r.ok === false) { emit({ ok: false, error: r.error, stale: r.stale, reason: r.reason }); process.exit(0) }
+  const img = r.img || {}
+  const s = img.screen ? [img.screen.w, img.screen.h] : [r.screen.w, r.screen.h]
+  const payload = { ok: true, s, did: (r.steps || []).length }
   if (r.hit !== undefined) payload.hit = r.hit
   if (r.tries > 1) payload.tries = r.tries
   if (r.banner) payload.banner = true
+  if (r.verifyDiffPx !== undefined) payload.verifyDiffPx = r.verifyDiffPx
+  if (r.scrolled !== undefined) { payload.scrolled = r.scrolled; payload.atEdge = r.atEdge; payload.notScrollable = r.notScrollable }
   if (r.img) {
-    payload.ch = r.img.changed !== false
-    if (r.img.changed !== false && r.img.box) payload.box = r.img.box
-    if (r.img.changed === false) payload.note = '画面未变化（点击可能没生效）'
-    payload.path = flagValue('--full') ? out : (r.img.cropPath || out)
+    payload.ch = img.changed !== false
+    payload.mode = img.mode
+    payload.reason = img.reason
+    payload.frameId = img.frameId
+    payload.expectedS = img.expectedS
+    payload.out = img.out
+    payload.contentBox = img.contentBox
+    if (img.changeBoxPx) payload.changeBoxPx = img.changeBoxPx
+    if (img.changeBoxPct) payload.changeBoxPct = img.changeBoxPct
+    if (img.changed === false && img.mode !== 'full') payload.note = '画面未变化（点击可能没生效）'
+    payload.path = img.path || out
   }
   emit(payload)
 } else {
